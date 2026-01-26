@@ -2,6 +2,8 @@
 
 像发送 HTTP 请求一样与 iframe 通信！基于 `postMessage` 实现的 iframe 跨域通信库。
 
+> 🌐 **Languages**: [English](./README.md) | [中文](./README.CN.md)
+
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-Ready-blue" alt="TypeScript Ready">
   <img src="https://img.shields.io/badge/API-Express%20Like-green" alt="Express Like API">
@@ -1324,7 +1326,7 @@ request-iframe/
 │   ├── constants/        # 常量定义
 │   ├── types/            # TypeScript 类型定义
 │   └── __tests__/        # 测试文件
-├── dist/                 # 构建输出
+├── library/              # 构建输出
 ├── coverage/             # 测试覆盖率报告
 ├── jest.config.js        # Jest 配置
 ├── tsconfig.json         # TypeScript 配置

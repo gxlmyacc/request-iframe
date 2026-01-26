@@ -1,4 +1,4 @@
 node_modules
-dist
+library
 **/*.test.ts
 **/__tests__

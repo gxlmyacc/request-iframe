@@ -2,20 +2,25 @@
   "name": "request-iframe",
   "version": "0.0.1",
   "description": "Communicate with iframes like sending HTTP requests",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "library/index.js",
+  "types": "library/index.d.ts",
   "scripts": {
     "build": "npm run build:types && npm run build:js",
     "build:types": "tsc --emitDeclarationOnly",
-    "build:js": "babel src --out-dir dist --extensions .ts --copy-files",
+    "build:js": "babel src --out-dir library --extensions .ts --copy-files",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src --ext .ts",
-    "lint:fix": "eslint src --ext .ts --fix"
+    "lint:fix": "eslint src --ext .ts --fix",
+    "prepare": "npm run build"
   },
   "files": [
-    "library"
+    "library",
+    "README.md",
+    "README.CN.md",
+    "QUICKSTART.md",
+    "QUICKSTART.CN.md"
   ],
   "keywords": [
     "iframe",

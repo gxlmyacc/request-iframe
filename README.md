@@ -2,6 +2,8 @@
 
 Communicate with iframes like sending HTTP requests! A cross-origin iframe communication library based on `postMessage`.
 
+> 🌐 **Languages**: [English](./README.md) | [中文](./README.CN.md)
+
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-Ready-blue" alt="TypeScript Ready">
   <img src="https://img.shields.io/badge/API-Express%20Like-green" alt="Express Like API">
