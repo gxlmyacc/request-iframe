@@ -1,0 +1,9 @@
+dist
+node_modules
+*.ejs
+*.html
+*.d.ts
+.DS_Store
+coverage/
+library/
+node_modules
