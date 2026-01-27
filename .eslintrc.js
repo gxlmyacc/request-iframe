@@ -25,5 +25,14 @@ module.exports = {
     "node": true,
     "es6": true,
     "jest": true
-  }
+  },
+  "overrides": [
+    {
+      "files": ["react/**/*.ts", "react/**/*.tsx"],
+      "parserOptions": {
+        "project": "./react/tsconfig.json",
+        "tsconfigRootDir": __dirname
+      }
+    }
+  ]
 }

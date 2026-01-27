@@ -1,14 +1,20 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'jsdom',
-  roots: ['<rootDir>/src'],
-  testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
+  roots: ['<rootDir>/src', '<rootDir>/react/src'],
+  testMatch: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx', '**/?(*.)+(spec|test).ts', '**/?(*.)+(spec|test).tsx'],
   collectCoverageFrom: [
     'src/**/*.ts',
+    'react/src/**/*.ts',
+    'react/src/**/*.tsx',
     '!src/**/*.d.ts',
     '!src/**/*.test.ts',
     '!src/**/__tests__/**',
-    '!src/index.ts'
+    '!src/index.ts',
+    '!react/src/**/*.d.ts',
+    '!react/src/**/*.test.ts',
+    '!react/src/**/*.test.tsx',
+    '!react/src/__tests__/**'
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html', 'json-summary'],
@@ -22,6 +28,7 @@ module.exports = {
   },
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   transform: {
-    '^.+\\.ts$': 'ts-jest'
+    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.tsx$': 'ts-jest'
   }
 };

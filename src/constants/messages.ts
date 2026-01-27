@@ -45,7 +45,44 @@ const defaultMessages = {
   STREAM_CANCELLED: 'Stream was cancelled: {0}',
   STREAM_ERROR: 'Stream error: {0}',
   STREAM_ENDED: 'Stream has ended',
-  STREAM_READ_ERROR: 'Failed to read stream data'
+  STREAM_READ_ERROR: 'Failed to read stream data',
+
+  /** Debug messages - Client */
+  DEBUG_CLIENT_REQUEST_START: '📤 [Client] Request Start',
+  DEBUG_CLIENT_REQUEST_SUCCESS: '✅ [Client] Request Success',
+  DEBUG_CLIENT_REQUEST_SUCCESS_FILE: '✅ [Client] Request Success (File)',
+  DEBUG_CLIENT_REQUEST_SUCCESS_STREAM: '✅ [Client] Request Success (Stream)',
+  DEBUG_CLIENT_REQUEST_FAILED: '❌ [Client] Request Failed',
+  DEBUG_CLIENT_RECEIVED_ACK: '📥 [Client] Received ACK',
+  DEBUG_CLIENT_RECEIVED_ASYNC: '⏳ [Client] Received ASYNC Notification',
+  DEBUG_CLIENT_RECEIVED_STREAM_START: '🌊 [Client] Received Stream Start',
+  DEBUG_CLIENT_RECEIVED_STREAM_DATA: '🌊 [Client] Received Stream Data',
+  DEBUG_CLIENT_RECEIVED_STREAM_END: '🌊 [Client] Received Stream End',
+  DEBUG_CLIENT_RECEIVED_RESPONSE: '📥 [Client] Received Response',
+  DEBUG_CLIENT_RECEIVED_ERROR: '📥 [Client] Received Error',
+  DEBUG_CLIENT_REQUEST_TIMEOUT: '⏱️ [Client] Request Timeout',
+  DEBUG_CLIENT_SENDING_REQUEST: '📤 [Client] Sending Request',
+  DEBUG_CLIENT_SENDING_PING: '📤 [Client] Sending Ping',
+  DEBUG_CLIENT_SENDING_RECEIVED_ACK: '📤 [Client] Sending Received ACK',
+
+  /** Debug messages - Server */
+  DEBUG_SERVER_RECEIVED_REQUEST: '📥 [Server] Received Request',
+  DEBUG_SERVER_SETTING_STATUS_CODE: '📝 [Server] Setting Status Code',
+  DEBUG_SERVER_SETTING_HEADER: '📝 [Server] Setting Header',
+  DEBUG_SERVER_SENDING_RESPONSE: '📤 [Server] Sending Response',
+  DEBUG_SERVER_SENDING_JSON_RESPONSE: '📤 [Server] Sending JSON Response',
+  DEBUG_SERVER_SENDING_FILE: '📤 [Server] Sending File',
+  DEBUG_SERVER_SENDING_STREAM: '📤 [Server] Sending Stream',
+  DEBUG_SERVER_SENDING_ACK: '📤 [Server] Sending ACK',
+  DEBUG_SERVER_SENDING_ASYNC: '📤 [Server] Sending ASYNC Notification',
+  DEBUG_SERVER_SENDING_STREAM_START: '🌊 [Server] Sending Stream Start',
+  DEBUG_SERVER_SENDING_STREAM_DATA: '🌊 [Server] Sending Stream Data',
+  DEBUG_SERVER_SENDING_STREAM_END: '🌊 [Server] Sending Stream End',
+  DEBUG_SERVER_SENDING_ERROR: '📤 [Server] Sending Error',
+  DEBUG_SERVER_SENDING_RESPONSE_VIA_DISPATCHER: '📤 [Server] Sending Response (via dispatcher)',
+  DEBUG_SERVER_HANDLING_REQUEST: '📥 [Server] Handling Request',
+  DEBUG_SERVER_EXECUTING_MIDDLEWARE_CHAIN: '⚙️ [Server] Executing Middleware Chain',
+  DEBUG_SERVER_MIDDLEWARE_CHAIN_COMPLETED: '✅ [Server] Middleware Chain Completed'
 } as const;
 
 /**

@@ -11,6 +11,8 @@ export interface MessageContext {
   source?: Window;
   /** Origin of the message */
   origin: string;
+  /** ID of the instance that handled this message (if handled) */
+  handledBy?: string;
 }
 
 /**
@@ -169,7 +171,7 @@ export class MessageChannel {
     targetOrigin: string,
     type: PostMessageData['type'],
     requestId: string,
-    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp'>>
+    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role'>>
   ): void {
     const message = createPostMessage(type, requestId, {
       ...data,

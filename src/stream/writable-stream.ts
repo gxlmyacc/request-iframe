@@ -7,7 +7,7 @@ import {
   StreamChunk
 } from './types';
 import { createPostMessage } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant } from '../constants';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, MessageRole } from '../constants';
 
 /**
  * Generate a unique stream ID
@@ -30,6 +30,7 @@ export class IframeWritableStream implements IIframeWritableStream {
   private readonly iterator?: () => AsyncGenerator<any, void, unknown>;
   private readonly nextFn?: () => Promise<StreamChunk> | StreamChunk;
   private readonly metadata?: Record<string, any>;
+  private readonly autoResolve?: boolean;
 
   public constructor(options: WritableStreamOptions = {}) {
     this.streamId = generateStreamId();
@@ -38,6 +39,7 @@ export class IframeWritableStream implements IIframeWritableStream {
     this.iterator = options.iterator;
     this.nextFn = options.next;
     this.metadata = options.metadata;
+    this.autoResolve = options.autoResolve;
   }
 
   /** Get stream state */
@@ -66,7 +68,9 @@ export class IframeWritableStream implements IIframeWritableStream {
       body: {
         streamId: this.streamId,
         ...data
-      }
+      },
+      role: MessageRole.SERVER,
+      senderId: this.context.serverId
     });
     
     // Use channel if available, otherwise use direct postMessage
@@ -95,7 +99,8 @@ export class IframeWritableStream implements IIframeWritableStream {
     this.sendMessage(MessageType.STREAM_START, {
       type: this.type,
       chunked: this.chunked,
-      metadata: this.metadata
+      metadata: this.metadata,
+      autoResolve: this.autoResolve
     });
 
     try {

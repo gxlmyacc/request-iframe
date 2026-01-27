@@ -6,7 +6,7 @@ import {
   StreamMessageData
 } from './types';
 import { createPostMessage } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamInternalMessageType } from '../constants';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamInternalMessageType, MessageRole } from '../constants';
 
 /**
  * Stream message handler interface
@@ -233,7 +233,9 @@ export class IframeReadableStream<T = any> implements IIframeReadableStream<T> {
       body: {
         streamId: this.streamId,
         reason
-      }
+      },
+      role: MessageRole.CLIENT,
+      senderId: (this.messageHandler as any).id
     });
     this.messageHandler.postMessage(message);
     

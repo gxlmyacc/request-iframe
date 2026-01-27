@@ -38,6 +38,28 @@ describe('interceptors', () => {
       expect(handlers).toContain(interceptor1);
       expect(handlers).toContain(interceptor2);
     });
+
+    it('should clear all interceptors', () => {
+      const manager = new InterceptorManager<RequestConfig>();
+      const interceptor1 = jest.fn((config) => config);
+      const interceptor2 = jest.fn((config) => config);
+
+      manager.use(interceptor1);
+      manager.use(interceptor2);
+
+      // Verify interceptors are added
+      let count = 0;
+      manager.forEach(() => { count++; });
+      expect(count).toBe(2);
+
+      // Clear all interceptors
+      manager.clear();
+
+      // Verify all interceptors are removed
+      count = 0;
+      manager.forEach(() => { count++; });
+      expect(count).toBe(0);
+    });
   });
 
   describe('runRequestInterceptors', () => {

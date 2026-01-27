@@ -167,7 +167,7 @@ request-iframe 采用三阶段超时策略，智能适应不同场景：
 
 ```typescript
 client.send('/api/getData', data, {
-  ackTimeout: 500,        // 阶段1：等待 ACK 的超时时间（默认 500ms）
+  ackTimeout: 1000,       // 阶段1：等待 ACK 的超时时间（默认 1000ms）
   timeout: 5000,          // 阶段2：请求超时时间（默认 5s）
   asyncTimeout: 120000    // 阶段3：异步请求超时时间（默认 120s）
 });
@@ -207,7 +207,7 @@ client.send('/api/getData', data, {
 
 | 阶段 | 超时时间 | 场景 |
 |------|----------|------|
-| ackTimeout | 较短（500ms） | 快速检测 Server 是否在线，避免长时间等待不可达的 iframe |
+| ackTimeout | 较短（1000ms） | 快速检测 Server 是否在线，避免长时间等待不可达的 iframe。从 500ms 增加到 1000ms，以适应性能较差的环境或浏览器繁忙的场景 |
 | timeout | 中等（5s） | 适用于简单的同步处理，如读取数据、参数校验等 |
 | asyncTimeout | 较长（120s） | 适用于复杂异步操作，如文件处理、批量操作、第三方 API 调用等 |
 
@@ -804,7 +804,7 @@ setMessages({
 | `target` | `HTMLIFrameElement \| Window` | 目标 iframe 元素或 window 对象 |
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
 | `options.trace` | `boolean` | 是否开启追踪模式（可选） |
-| `options.ackTimeout` | `number` | 全局默认 ACK 确认超时（ms），默认 500 |
+| `options.ackTimeout` | `number` | 全局默认 ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 全局默认请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 全局默认异步超时（ms），默认 120000 |
 
@@ -837,7 +837,7 @@ await client.send('/api/longTask', {}, {
 |------|------|------|
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
 | `options.trace` | `boolean` | 是否开启追踪模式（可选） |
-| `options.ackTimeout` | `number` | 等待客户端确认超时（ms），默认 5000 |
+| `options.ackTimeout` | `number` | 等待客户端确认超时（ms），默认 1000 |
 
 **返回值：** `RequestIframeServer`
 
@@ -853,7 +853,7 @@ await client.send('/api/longTask', {}, {
 |------|------|------|
 | `path` | `string` | 请求路径 |
 | `body` | `object` | 请求数据（可选） |
-| `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 500 |
+| `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
 | `options.headers` | `object` | 请求 headers（可选） |

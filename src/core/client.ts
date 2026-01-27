@@ -5,10 +5,13 @@ import {
   ErrorResponse,
   PostMessageData,
   RequestIframeClient,
-  RequestDefaults
+  RequestDefaults,
+  HeadersConfig,
+  HeaderValue
 } from '../types';
 import {
   generateRequestId,
+  generateInstanceId,
   CookieStore
 } from '../utils';
 import {
@@ -41,12 +44,16 @@ import {
  */
 export interface ClientOptions extends RequestDefaults {
   secretKey?: string;
+  headers?: HeadersConfig;
 }
 
 /**
  * RequestIframeClient implementation (only responsible for initiating requests, reuses server's listener)
  */
 export class RequestIframeClientImpl implements RequestIframeClient, StreamMessageHandler {
+  /** Unique instance ID */
+  public readonly id: string;
+
   public interceptors = {
     request: new RequestInterceptorManager(),
     response: new ResponseInterceptorManager()
@@ -61,6 +68,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
   private readonly defaultAckTimeout: number;
   private readonly defaultTimeout: number;
   private readonly defaultAsyncTimeout: number;
+  
+  /** Initial headers configuration */
+  private readonly initialHeaders?: HeadersConfig;
   
   /** 
    * Internal cookies storage
@@ -80,8 +90,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     targetWindow: Window,
     targetOrigin: string,
     server: RequestIframeClientServer,
-    options?: ClientOptions
+    options?: ClientOptions,
+    instanceId?: string
   ) {
+    this.id = instanceId || generateInstanceId();
     this.targetWindow = targetWindow;
     this.targetOrigin = targetOrigin;
     this.server = server;
@@ -91,6 +103,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this.defaultAckTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.defaultTimeout = options?.timeout ?? DefaultTimeout.REQUEST;
     this.defaultAsyncTimeout = options?.asyncTimeout ?? DefaultTimeout.ASYNC;
+    
+    // Save initial headers configuration
+    this.initialHeaders = options?.headers;
 
     // Register stream message processing callback
     this.server.setStreamCallback((data) => {
@@ -112,8 +127,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this.streamHandlers.delete(streamId);
   }
 
-  /**
-   * Send message (StreamMessageHandler interface implementation)
+  /*
+   Send message (StreamMessageHandler interface implementation)
    */
   public postMessage(message: any): void {
     this.server.messageDispatcher.send(this.targetWindow, message, this.targetOrigin);
@@ -132,6 +147,40 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       const messageType = (data.type as string).replace('stream_', '');
       handler({ ...body, type: messageType as any });
     }
+  }
+
+  /**
+   * Resolve header value (handle function type headers)
+   */
+  private resolveHeaderValue(value: HeaderValue, config: RequestConfig): string | string[] {
+    if (typeof value === 'function') {
+      return value(config);
+    }
+    return value;
+  }
+
+  /**
+   * Merge and resolve headers (initial headers + request headers)
+   * Request headers take precedence over initial headers
+   */
+  private mergeHeaders(config: RequestConfig): Record<string, string | string[]> {
+    const resolvedHeaders: Record<string, string | string[]> = {};
+
+    // First, resolve initial headers
+    if (this.initialHeaders) {
+      for (const [key, value] of Object.entries(this.initialHeaders)) {
+        resolvedHeaders[key] = this.resolveHeaderValue(value, config);
+      }
+    }
+
+    // Then, merge request headers (request headers take precedence)
+    if (config.headers) {
+      for (const [key, value] of Object.entries(config.headers)) {
+        resolvedHeaders[key] = this.resolveHeaderValue(value, config);
+      }
+    }
+
+    return resolvedHeaders;
   }
 
   /**
@@ -200,10 +249,12 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       config
     );
 
+    // Merge and resolve headers (initial headers + request headers)
+    const mergedHeaders = this.mergeHeaders(processedConfig);
+
     const {
       path: processedPath,
       body: processedBody,
-      headers: processedHeaders,
       cookies: processedCookies,
       ackTimeout = this.defaultAckTimeout,
       timeout = this.defaultTimeout,
@@ -294,12 +345,11 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
             const streamType = streamBody.type || StreamTypeConstant.DATA;
             const streamChunked = streamBody.chunked ?? true;
             const streamMetadata = streamBody.metadata;
+            const autoResolve = streamBody.autoResolve ?? false;
 
             // Create corresponding readable stream based on stream type
-            let readableStream: IframeReadableStream<T> | IframeFileReadableStream;
-            
             if (streamType === StreamTypeConstant.FILE) {
-              readableStream = new IframeFileReadableStream(
+              const readableStream = new IframeFileReadableStream(
                 streamId,
                 requestId,
                 this,
@@ -311,18 +361,66 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                   size: streamMetadata?.size
                 }
               );
-            } else {
-              readableStream = new IframeReadableStream<T>(
-                streamId,
+
+              // If autoResolve is enabled, automatically read and convert to fileData
+              if (autoResolve) {
+                // Automatically read the stream and convert to fileData
+                readableStream.read()
+                  .then((uint8Array: Uint8Array) => {
+                    // Convert Uint8Array to base64 string
+                    let binary = '';
+                    for (let i = 0; i < uint8Array.length; i++) {
+                      binary += String.fromCharCode(uint8Array[i]);
+                    }
+                    const base64Content = btoa(binary);
+
+                    const resp: Response<T> = {
+                      data: undefined as any,
+                      status: data.status || HttpStatus.OK,
+                      statusText: data.statusText || HttpStatusText[HttpStatus.OK],
+                      requestId,
+                      headers: data.headers,
+                      fileData: {
+                        content: base64Content,
+                        mimeType: streamMetadata?.mimeType || readableStream.mimeType || 'application/octet-stream',
+                        fileName: streamMetadata?.filename || readableStream.filename
+                      }
+                    };
+                    
+                    return runResponseInterceptors(this.interceptors.response, resp);
+                  })
+                  .then(resolve)
+                  .catch(reject);
+                return;
+              }
+
+              // Non-autoResolve: return file stream directly
+              const resp: Response<T> = {
+                data: undefined as any,
+                status: data.status || HttpStatus.OK,
+                statusText: data.statusText || HttpStatusText[HttpStatus.OK],
                 requestId,
-                this,
-                {
-                  type: streamType,
-                  chunked: streamChunked,
-                  metadata: streamMetadata
-                }
-              );
+                headers: data.headers,
+                stream: readableStream as any
+              };
+              
+              runResponseInterceptors(this.interceptors.response, resp)
+                .then(resolve)
+                .catch(reject);
+              return;
             }
+
+            // Non-file stream: create regular readable stream
+            const readableStream = new IframeReadableStream<T>(
+              streamId,
+              requestId,
+              this,
+              {
+                type: streamType,
+                chunked: streamChunked,
+                metadata: streamMetadata
+              }
+            );
 
             const resp: Response<T> = {
               data: undefined as any,
@@ -440,7 +538,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         {
           path: prefixedPath,
           body: processedBody,
-          headers: processedHeaders,
+          headers: mergedHeaders,
           cookies: mergedCookies
         }
       );
@@ -456,6 +554,45 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    */
   public getServer(): RequestIframeClientServer {
     return this.server;
+  }
+
+  /**
+   * Whether message handling is enabled
+   */
+  public get isOpen(): boolean {
+    return this.server.isOpen;
+  }
+
+  /**
+   * Enable message handling (register message handlers)
+   */
+  public open(): void {
+    this.server.open();
+  }
+
+  /**
+   * Disable message handling (unregister message handlers, but don't release resources)
+   */
+  public close(): void {
+    this.server.close();
+  }
+
+  /**
+   * Destroy client (close and release all resources)
+   */
+  public destroy(): void {
+    // Clear cookies
+    this._cookieStore.clear();
+    
+    // Clear stream handlers
+    this.streamHandlers.clear();
+    
+    // Clear interceptors
+    this.interceptors.request.clear();
+    this.interceptors.response.clear();
+    
+    // Destroy server (this will also release the message channel)
+    this.server.destroy();
   }
 
   /**

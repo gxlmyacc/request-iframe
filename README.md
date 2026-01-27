@@ -251,7 +251,7 @@ request-iframe uses a three-stage timeout strategy to intelligently adapt to dif
 
 ```typescript
 client.send('/api/getData', data, {
-  ackTimeout: 500,        // Stage 1: ACK timeout (default 500ms)
+  ackTimeout: 1000,       // Stage 1: ACK timeout (default 1000ms)
   timeout: 5000,          // Stage 2: Request timeout (default 5s)
   asyncTimeout: 120000    // Stage 3: Async request timeout (default 120s)
 });
@@ -291,7 +291,7 @@ Send REQUEST
 
 | Stage | Timeout | Scenario |
 |-------|---------|----------|
-| ackTimeout | Short (500ms) | Quickly detect if Server is online, avoid long waits for unreachable iframes |
+| ackTimeout | Short (1000ms) | Quickly detect if Server is online, avoid long waits for unreachable iframes. Increased from 500ms to accommodate slower environments or busy browsers |
 | timeout | Medium (5s) | Suitable for simple synchronous processing, like reading data, parameter validation |
 | asyncTimeout | Long (120s) | Suitable for complex async operations, like file processing, batch operations, third-party API calls |
 
@@ -712,7 +712,7 @@ Create a Client instance.
 | `target` | `HTMLIFrameElement \| Window` | Target iframe element or window object |
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
 | `options.trace` | `boolean` | Whether to enable trace mode (optional) |
-| `options.ackTimeout` | `number` | Global default ACK acknowledgment timeout (ms), default 500 |
+| `options.ackTimeout` | `number` | Global default ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Global default request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Global default async timeout (ms), default 120000 |
 
@@ -728,7 +728,7 @@ Create a Server instance.
 |-----------|------|-------------|
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
 | `options.trace` | `boolean` | Whether to enable trace mode (optional) |
-| `options.ackTimeout` | `number` | Wait for client acknowledgment timeout (ms), default 5000 |
+| `options.ackTimeout` | `number` | Wait for client acknowledgment timeout (ms), default 1000 |
 
 **Returns:** `RequestIframeServer`
 
@@ -744,7 +744,7 @@ Send a request.
 |-----------|------|-------------|
 | `path` | `string` | Request path |
 | `body` | `object` | Request data (optional) |
-| `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 500 |
+| `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
 | `options.headers` | `object` | Request headers (optional) |

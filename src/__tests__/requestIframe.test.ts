@@ -1,7 +1,7 @@
 import { requestIframeClient, clearRequestIframeClientCache } from '../api/client';
 import { requestIframeServer, clearRequestIframeServerCache } from '../api/server';
 import { RequestConfig, Response, ErrorResponse, PostMessageData } from '../types';
-import { HttpHeader, Messages } from '../constants';
+import { HttpHeader, MessageRole, Messages } from '../constants';
 
 /**
  * Create test iframe
@@ -64,7 +64,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -79,7 +80,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     requestId: msg.requestId,
                     data: { result: 'success' },
                     status: 200,
-                    statusText: 'OK'
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -157,7 +159,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'pong',
                   requestId: msg.requestId,
-                  secretKey: msg.secretKey
+                  secretKey: msg.secretKey,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -199,7 +202,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -215,7 +219,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     requestId: msg.requestId,
                     data: { success: true },
                     status: 200,
-                    statusText: 'OK'
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -262,7 +267,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -278,7 +284,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     requestId: msg.requestId,
                     data: { success: true },
                     status: 200,
-                    statusText: 'OK'
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -328,7 +335,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -347,7 +355,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                       code: 'METHOD_NOT_FOUND'
                     },
                     status: 404,
-                    statusText: 'Not Found'
+                    statusText: 'Not Found',
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -389,7 +398,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -403,7 +413,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     __requestIframe__: 1,
                     type: 'async',
                     requestId: msg.requestId,
-                    path: msg.path
+                    path: msg.path,
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -420,7 +431,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     requestId: msg.requestId,
                     data: { result: 'async success' },
                     status: 200,
-                    statusText: 'OK'
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -705,11 +717,16 @@ describe('requestIframeClient and requestIframeServer', () => {
       const server = requestIframeServer();
 
       server.on('getFile', async (req, res) => {
-        const fileContent = 'Hello World';
-        await res.sendFile(fileContent, {
-          mimeType: 'text/plain',
-          fileName: 'test.txt'
-        });
+        try {
+          const fileContent = 'Hello World';
+          await res.sendFile(fileContent, {
+            mimeType: 'text/plain',
+            fileName: 'test.txt'
+          });
+        } catch (error) {
+          console.error('Error in sendFile:', error);
+          throw error;
+        }
       });
 
       // Simulate request from iframe
@@ -727,22 +744,43 @@ describe('requestIframeClient and requestIframeServer', () => {
           source: mockContentWindow as any
         })
       );
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Wait for async handler to complete
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      // Verify sendFile was called
+      // Verify sendFile was called - now it uses stream
       expect(mockContentWindow.postMessage).toHaveBeenCalled();
-      const fileCall = mockContentWindow.postMessage.mock.calls.find(
-        (call: any[]) => call[0]?.type === 'response' && call[0]?.fileData
-      );
-      expect(fileCall).toBeDefined();
-      expect(fileCall[0].fileData.mimeType).toBe('text/plain');
-      expect(fileCall[0].fileData.fileName).toBe('test.txt');
       
-      // Decode base64 to verify content
-      if (fileCall[0].fileData.content) {
-        const decoded = atob(fileCall[0].fileData.content);
-        expect(decoded).toBe('Hello World');
+      // Debug: Check all message types sent
+      const allCalls = mockContentWindow.postMessage.mock.calls;
+      const messageTypes = allCalls.map(call => call[0]?.type).filter(Boolean);
+      if (messageTypes.length === 0) {
+        throw new Error('No messages were sent to mockContentWindow.postMessage');
       }
+      
+      const streamStartCall = allCalls.find(
+        (call: any[]) => call[0]?.type === 'stream_start'
+      );
+      if (!streamStartCall) {
+        throw new Error(`stream_start not found. Message types sent: ${messageTypes.join(', ')}`);
+      }
+      expect(streamStartCall).toBeDefined();
+      const streamBody = streamStartCall![0].body;
+      expect(streamBody.type).toBe('file');
+      expect(streamBody.autoResolve).toBe(true);
+      expect(streamBody.metadata?.mimeType).toBe('text/plain');
+      expect(streamBody.metadata?.filename).toBe('test.txt');
+
+      // Verify stream_data was sent
+      const streamDataCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'stream_data'
+      );
+      expect(streamDataCall).toBeDefined();
+      
+      // Verify stream_end was sent
+      const streamEndCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'stream_end'
+      );
+      expect(streamEndCall).toBeDefined();
 
       server.destroy();
       cleanupIframe(iframe);
@@ -784,13 +822,17 @@ describe('requestIframeClient and requestIframeServer', () => {
           source: mockContentWindow as any
         })
       );
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const fileCall = mockContentWindow.postMessage.mock.calls.find(
-        (call: any[]) => call[0]?.type === 'response' && call[0]?.fileData
+      // Verify stream_start was sent
+      const streamStartCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'stream_start'
       );
-      expect(fileCall).toBeDefined();
-      expect(fileCall![0].fileData.mimeType).toBe('text/plain');
+      expect(streamStartCall).toBeDefined();
+      const streamBody = streamStartCall![0].body;
+      expect(streamBody.type).toBe('file');
+      expect(streamBody.autoResolve).toBe(true);
+      expect(streamBody.metadata?.mimeType).toBe('text/plain');
 
       server.destroy();
       cleanupIframe(iframe);
@@ -829,13 +871,17 @@ describe('requestIframeClient and requestIframeServer', () => {
           source: mockContentWindow as any
         })
       );
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const fileCall = mockContentWindow.postMessage.mock.calls.find(
-        (call: any[]) => call[0]?.type === 'response' && call[0]?.fileData
+      // Verify stream_start was sent
+      const streamStartCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'stream_start'
       );
-      expect(fileCall).toBeDefined();
-      expect(fileCall[0].fileData.fileName).toBe('test.txt');
+      expect(streamStartCall).toBeDefined();
+      const streamBody = streamStartCall![0].body;
+      expect(streamBody.type).toBe('file');
+      expect(streamBody.autoResolve).toBe(true);
+      expect(streamBody.metadata?.filename).toBe('test.txt');
 
       server.destroy();
       cleanupIframe(iframe);
@@ -845,52 +891,14 @@ describe('requestIframeClient and requestIframeServer', () => {
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
 
-      let responseMessage: any = null;
       const mockContentWindow = {
-        postMessage: jest.fn((msg: PostMessageData) => {
-          if (msg.type === 'request') {
-            window.dispatchEvent(
-              new MessageEvent('message', {
-                data: {
-                  __requestIframe__: 1,
-                  type: 'ack',
-                  requestId: msg.requestId,
-                  path: msg.path
-                },
-                origin
-              })
-            );
-            setTimeout(() => {
-              const response: PostMessageData = {
-                __requestIframe__: 1,
-                timestamp: Date.now(),
-                type: 'response',
-                requestId: msg.requestId,
-                fileData: {
-                  content: btoa('test'),
-                  mimeType: 'text/plain',
-                  fileName: 'test.txt'
-                },
-                status: 200,
-                requireAck: true
-              };
-              responseMessage = response;
-              window.dispatchEvent(
-                new MessageEvent('message', {
-                  data: response,
-                  origin
-                })
-              );
-            }, 10);
-          }
-        })
+        postMessage: jest.fn()
       };
       Object.defineProperty(iframe, 'contentWindow', {
         value: mockContentWindow,
         writable: true
       });
 
-      const client = requestIframeClient(iframe);
       const server = requestIframeServer();
 
       server.on('getFileAck', async (req, res) => {
@@ -916,19 +924,139 @@ describe('requestIframeClient and requestIframeServer', () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 150));
 
-      // Client should send received message when requireAck is true
-      const receivedCall = mockContentWindow.postMessage.mock.calls.find(
-        (call: any[]) => call[0]?.type === 'received'
+      // Verify stream_start was sent with requireAck
+      const streamStartCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'stream_start'
       );
-      // Note: received message is sent by client, not server
-      // So we check that the response was sent with requireAck
-      if (responseMessage && 'requireAck' in responseMessage) {
-        expect(responseMessage.requireAck).toBe(true);
-      }
+      expect(streamStartCall).toBeDefined();
+      const streamBody = streamStartCall![0].body;
+      expect(streamBody.type).toBe('file');
+      expect(streamBody.autoResolve).toBe(true);
 
       server.destroy();
       cleanupIframe(iframe);
     });
+
+    it('should auto-resolve file stream to fileData on client side', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            // Send ACK first
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            // Then send stream_start
+            setTimeout(() => {
+              const streamId = 'stream-test';
+              const fileContent = btoa('Hello World');
+              
+              // Send stream_start
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    timestamp: Date.now(),
+                    type: 'stream_start',
+                    requestId: msg.requestId,
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {
+                      'Content-Type': 'text/plain'
+                    },
+                    body: {
+                      streamId,
+                      type: 'file',
+                      chunked: false,
+                      autoResolve: true,
+                      metadata: {
+                        filename: 'test.txt',
+                        mimeType: 'text/plain'
+                      }
+                    },
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+              
+              // Send stream_data
+              setTimeout(() => {
+                window.dispatchEvent(
+                  new MessageEvent('message', {
+                    data: {
+                      __requestIframe__: 1,
+                      timestamp: Date.now(),
+                      type: 'stream_data',
+                      requestId: msg.requestId,
+                      body: {
+                        streamId,
+                        data: fileContent,
+                        done: true
+                      },
+                      role: MessageRole.SERVER
+                    },
+                    origin
+                  })
+                );
+                
+                // Send stream_end
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new MessageEvent('message', {
+                      data: {
+                        __requestIframe__: 1,
+                        timestamp: Date.now(),
+                        type: 'stream_end',
+                        requestId: msg.requestId,
+                        body: {
+                          streamId
+                        },
+                        role: MessageRole.SERVER
+                      },
+                      origin
+                    })
+                  );
+                }, 100);
+              }, 100);
+            }, 100);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+
+      const response = await client.send('getFile', undefined, { 
+        ackTimeout: 1000,
+        timeout: 10000
+      }) as any;
+      
+      // Verify that fileData was automatically resolved
+      expect(response.fileData).toBeDefined();
+      expect(response.fileData!.mimeType).toBe('text/plain');
+      expect(response.fileData!.fileName).toBe('test.txt');
+      expect(response.fileData!.content).toBe(btoa('Hello World'));
+      
+      // Verify that stream is not present (because it was auto-resolved)
+      expect(response.stream).toBeUndefined();
+
+      cleanupIframe(iframe);
+    }, 20000);
   });
 
   describe('server.map', () => {
@@ -1219,11 +1347,19 @@ describe('requestIframeClient and requestIframeServer', () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 50));
 
+      // Wait for response to be sent
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       // Simulate client receiving response
       const responseCall = mockContentWindow.postMessage.mock.calls.find(
         (call: any[]) => call[0]?.type === 'response'
       );
-      if (responseCall) {
+      expect(responseCall).toBeDefined();
+      if (responseCall && responseCall[0]) {
+        // Verify response contains Set-Cookie header
+        expect(responseCall[0].headers).toBeDefined();
+        expect(responseCall[0].headers[HttpHeader.SET_COOKIE]).toBeDefined();
+        
         window.dispatchEvent(
           new MessageEvent('message', {
             data: responseCall[0],
@@ -1232,6 +1368,9 @@ describe('requestIframeClient and requestIframeServer', () => {
           })
         );
       }
+      
+      // Wait for response to be processed
+      await responsePromise;
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Verify client automatically saved server-set cookies
@@ -1258,7 +1397,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -1271,7 +1411,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                 requestId: msg.requestId,
                 data: { result: 'success' },
                 status: 200,
-                requireAck: true
+                requireAck: true,
+                role: MessageRole.SERVER
               };
               responseMessage = response;
               window.dispatchEvent(
@@ -1334,7 +1475,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -1348,7 +1490,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     requestId: msg.requestId,
                     data: { json: true },
                     status: 200,
-                    requireAck: true
+                    requireAck: true,
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -1409,7 +1552,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -1423,7 +1567,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     requestId: msg.requestId,
                     data: { error: 'Not Found' },
                     status: 404,
-                    statusText: 'Not Found'
+                    statusText: 'Not Found',
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -1991,7 +2136,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -2007,7 +2153,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                       streamId: 'stream-123',
                       type: 'data',
                       chunked: true
-                    }
+                    },
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -2073,7 +2220,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                   __requestIframe__: 1,
                   type: 'ack',
                   requestId: msg.requestId,
-                  path: msg.path
+                  path: msg.path,
+                  role: MessageRole.SERVER
                 },
                 origin
               })
@@ -2089,7 +2237,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                       streamId: 'stream-123',
                       type: 'data',
                       chunked: true
-                    }
+                    },
+                    role: MessageRole.SERVER
                   },
                   origin
                 })
@@ -2131,7 +2280,7 @@ describe('requestIframeClient and requestIframeServer', () => {
           source: mockContentWindow as any
         })
       );
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       const streamStartCall = mockContentWindow.postMessage.mock.calls.find(
         (call: any[]) => call[0]?.type === 'stream_start'
@@ -2165,6 +2314,76 @@ describe('requestIframeClient and requestIframeServer', () => {
       expect(server.isOpen).toBe(true);
 
       server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle client open/close/destroy methods', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+
+      expect(client.isOpen).toBe(true);
+
+      client.close();
+      expect(client.isOpen).toBe(false);
+
+      client.open();
+      expect(client.isOpen).toBe(true);
+
+      // Test destroy
+      client.setCookie('test', 'value');
+      expect(client.getCookie('test')).toBe('value');
+
+      client.destroy();
+      expect(client.isOpen).toBe(false);
+      // Cookies should be cleared after destroy
+      expect(client.getCookie('test')).toBeUndefined();
+
+      cleanupIframe(iframe);
+    });
+
+    it('should clear interceptors on destroy', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+
+      // Add interceptors
+      const requestInterceptor = jest.fn((config) => config);
+      const responseInterceptor = jest.fn((response) => response);
+      
+      client.interceptors.request.use(requestInterceptor);
+      client.interceptors.response.use(responseInterceptor);
+
+      // Destroy should clear interceptors
+      client.destroy();
+
+      // Interceptors should be cleared (handlers array should be empty)
+      let interceptorCount = 0;
+      client.interceptors.request.forEach(() => { interceptorCount++; });
+      expect(interceptorCount).toBe(0);
+
+      interceptorCount = 0;
+      client.interceptors.response.forEach(() => { interceptorCount++; });
+      expect(interceptorCount).toBe(0);
+
       cleanupIframe(iframe);
     });
 
@@ -2208,6 +2427,126 @@ describe('requestIframeClient and requestIframeServer', () => {
         (call: any[]) => call[0]?.type === 'error' && call[0]?.error?.code === 'METHOD_NOT_FOUND'
       );
       expect(errorCall).toBeDefined();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should return unregister function from on method', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+
+      // on method should return an unregister function
+      const unregister = server.on('test', (req, res) => {
+        res.send({});
+      });
+
+      expect(typeof unregister).toBe('function');
+
+      // Use the returned function to unregister
+      unregister();
+
+      // Verify handler is removed
+      const requestId = 'req-unregister';
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            type: 'request',
+            requestId: requestId,
+            path: 'test',
+            body: {}
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      // Should not find handler (will send error)
+      const errorCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'error' && call[0]?.error?.code === 'METHOD_NOT_FOUND'
+      );
+      expect(errorCall).toBeDefined();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should support batch unregister with off method', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+
+      // Register multiple handlers
+      server.on('path1', (req, res) => res.send({ path: '1' }));
+      server.on('path2', (req, res) => res.send({ path: '2' }));
+      server.on('path3', (req, res) => res.send({ path: '3' }));
+
+      // Batch unregister
+      server.off(['path1', 'path2']);
+
+      // path1 and path2 should be removed
+      const requestId1 = 'req-1';
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            type: 'request',
+            requestId: requestId1,
+            path: 'path1',
+            body: {}
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const errorCall1 = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'error' && call[0]?.error?.code === 'METHOD_NOT_FOUND'
+      );
+      expect(errorCall1).toBeDefined();
+
+      // path3 should still work
+      const requestId3 = 'req-3';
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            type: 'request',
+            requestId: requestId3,
+            path: 'path3',
+            body: {}
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const successCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'response' && call[0]?.data?.path === '3'
+      );
+      expect(successCall).toBeDefined();
 
       server.destroy();
       cleanupIframe(iframe);

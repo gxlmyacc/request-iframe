@@ -34,6 +34,13 @@ export class InterceptorManager<T> {
   }
 
   /**
+   * Clear all interceptors
+   */
+  clear(): void {
+    this.handlers.length = 0;
+  }
+
+  /**
    * Iterate over all interceptors
    */
   forEach(fn: (handler: { fulfilled: InterceptorFunction<T>; rejected?: (error: any) => any }) => void): void {

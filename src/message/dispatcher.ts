@@ -1,7 +1,8 @@
+import { MessageRole, MessageRoleValue } from '../constants';
 import {
   PostMessageData
 } from '../types';
-import { getProtocolVersion } from '../utils';
+import { getProtocolVersion, createPostMessage } from '../utils';
 import { MessageChannel, type MessageContext } from './channel';
 
 /**
@@ -71,6 +72,12 @@ export class MessageDispatcher {
   /** Channel type */
   public readonly type: MessageChannel['type'];
   
+  /** Role of this dispatcher ('client' or 'server') */
+  private readonly role: MessageRoleValue;
+  
+  /** Instance ID of the client/server that owns this dispatcher */
+  private readonly instanceId?: string;
+  
   /** Underlying message channel */
   private readonly channel: MessageChannel;
   
@@ -83,10 +90,12 @@ export class MessageDispatcher {
   /** Reference count (for determining if can be destroyed when cached) */
   private refCount = 0;
 
-  public constructor(channel: MessageChannel) {
+  public constructor(channel: MessageChannel, role: MessageRoleValue, instanceId?: string) {
     this.channel = channel;
     this.secretKey = channel.secretKey;
     this.type = channel.type;
+    this.role = role;
+    this.instanceId = instanceId;
     
     // Create bound receiver callback
     this.boundReceiver = (data, context) => {
@@ -173,11 +182,34 @@ export class MessageDispatcher {
    * Dispatch message to matching handlers
    */
   private dispatchMessage(data: PostMessageData, context: MessageContext): void {
+    // If message has already been handled by another dispatcher, skip processing
+    if (context.handledBy) {
+      return;
+    }
+
+    // Role-based message filtering: only process messages from the opposite role
+    // - Server only processes messages from client (role === 'client')
+    // - Client only processes messages from server (role === 'server')
+    if (data.role !== undefined) {
+      const expectedRole = this.role === MessageRole.CLIENT 
+        ? MessageRole.SERVER 
+        : MessageRole.CLIENT;
+      if (data.role !== expectedRole) {
+        // Message is from the same role, ignore it to prevent routing confusion
+        return;
+      }
+    }
+
     const type = data.type as string;
     const version = getProtocolVersion(data);
 
     for (const entry of this.handlers) {
       if (this.matchType(type, entry.matcher)) {
+        // If message has been handled by a previous handler, stop processing
+        if (context.handledBy) {
+          break;
+        }
+
         // If handler specified version validation
         if (entry.versionValidator && version !== undefined) {
           if (!entry.versionValidator(version)) {
@@ -189,6 +221,8 @@ export class MessageDispatcher {
         
         try {
           entry.handler(data, context);
+          // After handler execution, check if it marked the message as handled
+          // If context.handledBy is set by the handler, subsequent handlers will be skipped
         } catch (e) {
           // Ignore handler exception, continue executing other handlers
           console.error('[request-iframe] Handler error:', e);
@@ -222,6 +256,13 @@ export class MessageDispatcher {
    * @param targetOrigin target origin (defaults to '*')
    */
   public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): void {
+    // Automatically set role and senderId if not already set (for backward compatibility)
+    if (message.role === undefined) {
+      message.role = this.role;
+    }
+    if (message.senderId === undefined && this.instanceId) {
+      message.senderId = this.instanceId;
+    }
     this.channel.send(target, message, targetOrigin);
   }
 
@@ -238,9 +279,16 @@ export class MessageDispatcher {
     targetOrigin: string,
     type: PostMessageData['type'],
     requestId: string,
-    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp'>>
+    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role' | 'senderId'>>
   ): void {
-    this.channel.sendMessage(target, targetOrigin, type, requestId, data);
+    // Automatically set role and senderId based on dispatcher's role and instanceId
+    // Create message with role and senderId using createPostMessage directly
+    const message = createPostMessage(type, requestId, {
+      ...data,
+      role: this.role,
+      senderId: this.instanceId
+    } as any);
+    this.channel.send(target, message, targetOrigin);
   }
 
   // ==================== Utilities ====================

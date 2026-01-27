@@ -132,18 +132,30 @@ export const MessageType = {
   STREAM_CANCEL: 'stream_cancel'
 } as const;
 
+export const MessageRole = {
+  /** Server role */
+  SERVER: 'server',
+  /** Client role */
+  CLIENT: 'client'
+} as const;
+
+export type MessageRoleValue = typeof MessageRole[keyof typeof MessageRole];
+
 /**
  * Default timeout configuration (milliseconds)
  */
 export const DefaultTimeout = {
-  /** ACK confirmation timeout: 500ms (client waiting for server confirmation) */
-  ACK: 500,
+  /** 
+   * ACK confirmation timeout: 1000ms (1s)
+   * Used for both client waiting for server ACK and server waiting for client RECEIVED.
+   * Increased from 500ms to accommodate slower environments or busy browsers where postMessage
+   * serialization/deserialization may take longer.
+   */
+  ACK: 1000,
   /** Request timeout: 5s */
   REQUEST: 5000,
   /** Async request timeout: 120s */
-  ASYNC: 120000,
-  /** Server waiting for client confirmation timeout: 5s (server waiting for client to confirm response received) */
-  SERVER_ACK: 5000
+  ASYNC: 120000
 } as const;
 
 /**

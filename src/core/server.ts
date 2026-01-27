@@ -11,6 +11,7 @@ import { ServerRequestImpl } from './request';
 import { ServerResponseImpl } from './response';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
 import { getOrCreateMessageChannel, releaseMessageChannel } from '../utils/cache';
+import { generateInstanceId } from '../utils';
 import {
   MessageType,
   ErrorCode,
@@ -19,8 +20,10 @@ import {
   Messages,
   DefaultTimeout,
   ProtocolVersion,
-  formatMessage
+  formatMessage,
+  MessageRole
 } from '../constants';
+import { isPromise } from '../utils';
 
 /**
  * Middleware item (contains path matcher and middleware function)
@@ -49,6 +52,8 @@ export interface ServerOptions {
   ackTimeout?: number;
   /** Protocol version validator (optional, uses built-in validator by default) */
   versionValidator?: VersionValidator;
+  /** Whether to automatically open when creating the server. Default is true. */
+  autoOpen?: boolean;
 }
 
 /**
@@ -56,6 +61,9 @@ export interface ServerOptions {
  * Uses shared MessageDispatcher (backed by MessageChannel) to listen for and send messages
  */
 export class RequestIframeServerImpl implements RequestIframeServer {
+  /** Unique instance ID */
+  public readonly id: string;
+
   private readonly dispatcher: MessageDispatcher;
   private readonly ackTimeout: number;
   private readonly versionValidator: VersionValidator;
@@ -72,15 +80,18 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   private _isOpen = false;
 
   public constructor(options?: ServerOptions) {
-    this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.SERVER_ACK;
+    this.id = generateInstanceId();
+    this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.versionValidator = options?.versionValidator ?? isCompatibleVersion;
     
     // Get or create shared channel and create dispatcher
     const channel = getOrCreateMessageChannel(options?.secretKey);
-    this.dispatcher = new MessageDispatcher(channel);
+    this.dispatcher = new MessageDispatcher(channel, MessageRole.SERVER, this.id);
     
-    // Auto-open by default
-    this.open();
+    // Auto-open by default (unless explicitly set to false)
+    if (options?.autoOpen !== false) {
+      this.open();
+    }
   }
 
   /**
@@ -207,6 +218,60 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     return this.dispatcher;
   }
 
+  private handleRequestError(res: ServerResponseImpl, 
+    targetWindow: Window,
+    targetOrigin: string, 
+    data: PostMessageData,
+    err: any
+  ) {
+    if (!res._sent) {
+      this.dispatcher.sendMessage(
+        targetWindow,
+        targetOrigin,
+        MessageType.ERROR,
+        data.requestId,
+        {
+          path: data.path,
+          error: {
+            message: (err && err.message) || Messages.REQUEST_FAILED,
+            code: (err && err.code) || ErrorCode.REQUEST_ERROR
+          },
+          status: res.statusCode || HttpStatus.INTERNAL_SERVER_ERROR,
+          statusText: HttpStatusText[HttpStatus.INTERNAL_SERVER_ERROR],
+          headers: res.headers
+        }
+      );
+    }
+  }
+
+  private handleRequestResult(res: ServerResponseImpl, 
+    targetWindow: Window,
+    targetOrigin: string, 
+    data: PostMessageData,
+    result: any,
+  ) {
+    if (!res._sent && result !== undefined) {
+      res.send(result);
+    } else if (!res._sent) {
+      this.dispatcher.sendMessage(
+        targetWindow,
+        targetOrigin,
+        MessageType.ERROR,
+        data.requestId,
+        {
+          path: data.path,
+          error: {
+            message: Messages.NO_RESPONSE_SENT,
+            code: ErrorCode.NO_RESPONSE
+          },
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          statusText: HttpStatusText[HttpStatus.INTERNAL_SERVER_ERROR],
+          headers: res.headers
+        }
+      );
+    }
+  }
+
   /**
    * Handle request
    */
@@ -214,20 +279,24 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     if (!data.path) return;
     if (!context.source) return;
 
+    // If message has already been handled by another server instance, skip processing
+    if (context.handledBy) {
+      return;
+    }
+
     const targetWindow = context.source;
     const targetOrigin = context.origin;
 
-    // Send ACK immediately via dispatcher
-    this.dispatcher.sendMessage(
-      targetWindow,
-      targetOrigin,
-      MessageType.ACK,
-      data.requestId,
-      { path: data.path }
-    );
-
-    const handlerFn = this.handlers.get(data.path);
+    // Use prefixed path to match registered handlers
+    const prefixedPath = this.dispatcher.prefixPath(data.path);
+    const handlerFn = this.handlers.get(prefixedPath);
     if (!handlerFn) {
+      // No handler found in this instance
+      // Mark as handled by this instance (using special marker) to prevent other instances from processing
+      // This ensures only one instance sends the error response
+      context.handledBy = this.id;
+      
+      // Send METHOD_NOT_FOUND error
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -243,6 +312,18 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       return;
     }
 
+    // Mark message as handled by this server instance to prevent other server instances from processing it
+    context.handledBy = this.id;
+
+    // Send ACK immediately via dispatcher
+    this.dispatcher.sendMessage(
+      targetWindow,
+      targetOrigin,
+      MessageType.ACK,
+      data.requestId,
+      { path: data.path }
+    );
+
     // Create response object with channel reference
     const res = new ServerResponseImpl(
       data.requestId,
@@ -250,7 +331,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       data.secretKey,
       targetWindow,
       targetOrigin,
-      this.dispatcher.getChannel()
+      this.dispatcher.getChannel(),
+      this.id
     );
 
     // Register callback waiting for client acknowledgment
@@ -269,66 +351,29 @@ export class RequestIframeServerImpl implements RequestIframeServer {
 
     // Execute middleware chain
     this.runMiddlewares(req, res, () => {
-      const result = handlerFn(req, res);
 
-      if (result instanceof Promise) {
-        // Async task
-        this.dispatcher.sendMessage(
-          targetWindow,
-          targetOrigin,
-          MessageType.ASYNC,
-          data.requestId,
-          { path: data.path }
-        );
+      try {
+        const result = handlerFn(req, res);
 
-        result
-          .then((value) => {
-            if (!res._sent && value !== undefined) {
-              res.send(value);
-            } else if (!res._sent) {
-              this.dispatcher.sendMessage(
-                targetWindow,
-                targetOrigin,
-                MessageType.ERROR,
-                data.requestId,
-                {
-                  path: data.path,
-                  error: {
-                    message: Messages.NO_RESPONSE_SENT,
-                    code: ErrorCode.NO_RESPONSE
-                  },
-                  status: HttpStatus.INTERNAL_SERVER_ERROR,
-                  statusText: HttpStatusText[HttpStatus.INTERNAL_SERVER_ERROR],
-                  headers: res.headers
-                }
-              );
-            }
-          })
-          .catch((err) => {
-            if (!res._sent) {
-              this.dispatcher.sendMessage(
-                targetWindow,
-                targetOrigin,
-                MessageType.ERROR,
-                data.requestId,
-                {
-                  path: data.path,
-                  error: {
-                    message: (err && err.message) || Messages.REQUEST_FAILED,
-                    code: (err && err.code) || ErrorCode.REQUEST_ERROR
-                  },
-                  status: res.statusCode || HttpStatus.INTERNAL_SERVER_ERROR,
-                  statusText: HttpStatusText[HttpStatus.INTERNAL_SERVER_ERROR],
-                  headers: res.headers
-                }
-              );
-            }
-          });
-      } else {
-        // Synchronous processing
-        if (!res._sent && result !== undefined) {
-          res.send(result);
+        if (isPromise(result)) {
+          // Async task
+          this.dispatcher.sendMessage(
+            targetWindow,
+            targetOrigin,
+            MessageType.ASYNC,
+            data.requestId,
+            { path: data.path }
+          );
+  
+          result.then(
+            this.handleRequestResult.bind(this, res, targetWindow, targetOrigin, data)
+          ).catch(this.handleRequestError.bind(this, res, targetWindow, targetOrigin, data));
+        } else {
+          // Synchronous processing
+          this.handleRequestResult(res, targetWindow, targetOrigin, data, result); 
         }
+      } catch (error) {
+        this.handleRequestError(res, targetWindow, targetOrigin, data, error);
       }
     });
   }
@@ -365,8 +410,14 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     }
   }
 
-  public on(path: string, handler: ServerHandler): void {
-    this.handlers.set(this.dispatcher.prefixPath(path), handler);
+  public on(path: string, handler: ServerHandler): () => void {
+    const prefixedPath = this.dispatcher.prefixPath(path);
+    this.handlers.set(prefixedPath, handler);
+    
+    // Return unregister function
+    return () => {
+      this.handlers.delete(prefixedPath);
+    };
   }
 
   private runMiddlewares(
@@ -413,14 +464,26 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     next();
   }
 
-  public off(path: string): void {
-    this.handlers.delete(this.dispatcher.prefixPath(path));
+  public off(path: string | string[]): void {
+    if (Array.isArray(path)) {
+      // Batch unregister
+      path.forEach(p => {
+        this.handlers.delete(this.dispatcher.prefixPath(p));
+      });
+    } else {
+      // Single unregister
+      this.handlers.delete(this.dispatcher.prefixPath(path));
+    }
   }
 
-  public map(handlers: Record<string, ServerHandler>): void {
+  public map(handlers: Record<string, ServerHandler>): (() => void) {
+    const unregisterFns: (() => void)[] = [];
     Object.entries(handlers).forEach(([path, h]) => {
-      this.on(path, h);
+      unregisterFns.push(this.on(path, h));
     });
+    return () => {
+      unregisterFns.forEach(fn => fn());
+    };
   }
 
   /**

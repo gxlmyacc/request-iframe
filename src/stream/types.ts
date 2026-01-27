@@ -30,6 +30,11 @@ export interface WritableStreamOptions {
   next?: () => Promise<StreamChunk> | StreamChunk;
   /** Stream metadata */
   metadata?: Record<string, any>;
+  /** 
+   * Whether to auto-resolve on client side
+   * If true, client will automatically read the stream and return fileData instead of stream
+   */
+  autoResolve?: boolean;
 }
 
 /**
@@ -82,6 +87,10 @@ export interface StreamBindContext {
   secretKey?: string;
   /** MessageChannel for sending messages (optional, uses direct postMessage if not provided) */
   channel?: MessageChannel;
+  /** Server instance ID (for server-side streams) */
+  serverId?: string;
+  /** Client instance ID (for client-side streams) */
+  clientId?: string;
 }
 
 /**
@@ -173,4 +182,9 @@ export interface StreamMessageData {
   reason?: string;
   /** Metadata */
   metadata?: Record<string, any>;
+  /** 
+   * Whether to auto-resolve on client side
+   * If true, client will automatically read the stream and return fileData instead of stream
+   */
+  autoResolve?: boolean;
 }

@@ -1,5 +1,5 @@
 import { ErrorResponse, RequestIframeClient, RequestIframeClientOptions } from '../types';
-import { getIframeTargetOrigin } from '../utils';
+import { getIframeTargetOrigin, generateInstanceId } from '../utils';
 import { RequestIframeClientServer } from '../core/server-client';
 import { RequestIframeClientImpl } from '../core/client';
 import { setupClientDebugInterceptors } from '../utils/debug';
@@ -38,19 +38,24 @@ export function requestIframeClient(
   // Determine secretKey
   const secretKey = options?.secretKey;
   
+  // Generate instance ID first (will be used by both client and server)
+  const instanceId = generateInstanceId();
+  
   // Create ClientServer (internally obtains or creates a shared MessageChannel)
   const server = new RequestIframeClientServer({
     secretKey,
-    ackTimeout: options?.ackTimeout
-  });
+    ackTimeout: options?.ackTimeout,
+    autoOpen: options?.autoOpen
+  }, instanceId);
   
   // Create client instance
   const client = new RequestIframeClientImpl(targetWindow, targetOrigin, server, {
     secretKey,
     ackTimeout: options?.ackTimeout,
     timeout: options?.timeout,
-    asyncTimeout: options?.asyncTimeout
-  });
+    asyncTimeout: options?.asyncTimeout,
+    headers: options?.headers
+  }, instanceId);
 
   // If trace mode is enabled, register debug interceptors
   if (options?.trace) {

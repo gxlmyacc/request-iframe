@@ -19,7 +19,8 @@ export function requestIframeServer(
   // Create server (internally obtains or creates a shared MessageChannel)
   const server = new RequestIframeServerImpl({
     secretKey,
-    ackTimeout: options?.ackTimeout
+    ackTimeout: options?.ackTimeout,
+    autoOpen: options?.autoOpen
   });
 
   // If trace mode is enabled, register debug listeners

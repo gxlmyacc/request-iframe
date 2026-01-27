@@ -1,7 +1,7 @@
 import { ServerResponse, CookieOptions, SendOptions, SendFileOptions } from '../types';
 import { createPostMessage, createSetCookie, createClearCookie } from '../utils';
-import { MessageType, HttpStatus, HttpHeader, getStatusText } from '../constants';
-import { IframeWritableStream } from '../stream';
+import { MessageType, HttpStatus, HttpHeader, getStatusText, MessageRole } from '../constants';
+import { IframeWritableStream, IframeFileWritableStream } from '../stream';
 import { MessageChannel } from '../message';
 
 
@@ -23,6 +23,7 @@ export class ServerResponseImpl implements ServerResponse {
   private readonly targetWindow: Window;
   private readonly targetOrigin: string;
   private readonly channel?: MessageChannel;
+  private readonly serverId?: string;
   private onAckCallback?: AckCallback;
   public _sent = false;
 
@@ -32,7 +33,8 @@ export class ServerResponseImpl implements ServerResponse {
     secretKey: string | undefined,
     targetWindow: Window,
     targetOrigin: string,
-    channel?: MessageChannel
+    channel?: MessageChannel,
+    serverId?: string
   ) {
     this.requestId = requestId;
     this.path = path;
@@ -40,6 +42,7 @@ export class ServerResponseImpl implements ServerResponse {
     this.targetWindow = targetWindow;
     this.targetOrigin = targetOrigin;
     this.channel = channel;
+    this.serverId = serverId;
   }
 
   /**
@@ -86,7 +89,9 @@ export class ServerResponseImpl implements ServerResponse {
           status: this.statusCode,
           statusText: getStatusText(this.statusCode),
           headers: this.headers,
-          requireAck: false
+          requireAck: false,
+          role: MessageRole.SERVER,
+          senderId: this.serverId
         })
       );
       return Promise.resolve(true);
@@ -104,7 +109,9 @@ export class ServerResponseImpl implements ServerResponse {
           status: this.statusCode,
           statusText: getStatusText(this.statusCode),
           headers: this.headers,
-          requireAck: true
+          requireAck: true,
+          role: MessageRole.SERVER,
+          senderId: this.serverId
         })
       );
     });
@@ -120,59 +127,54 @@ export class ServerResponseImpl implements ServerResponse {
     options?: SendFileOptions
   ): Promise<boolean> {
     if (this._sent) return false;
-    this._sent = true;
 
-    const requireAck = options?.requireAck ?? false;
-    let base64Content: string;
     let mimeType = options?.mimeType || 'application/octet-stream';
     let fileName = options?.fileName;
+    let fileContent: string | Uint8Array;
 
+    // Convert content to base64 string or Uint8Array
     if (typeof content === 'string') {
       // If it's a plain string, convert to base64
-      base64Content = btoa(unescape(encodeURIComponent(content)));
+      fileContent = btoa(unescape(encodeURIComponent(content)));
     } else if (content instanceof File) {
       mimeType = content.type || mimeType;
       fileName = fileName || content.name;
-      base64Content = await this.blobToBase64(content);
+      fileContent = await this.blobToBase64(content);
     } else {
-      // Blob
-      base64Content = await this.blobToBase64(content);
+      // Blob - convert to base64
+      fileContent = await this.blobToBase64(content);
     }
 
-    // Merge file-related headers
-    const fileHeaders: Record<string, string | string[]> = {
-      ...this.headers,
-      [HttpHeader.CONTENT_TYPE]: mimeType,
-      [HttpHeader.CONTENT_DISPOSITION]: fileName 
-        ? `attachment; filename="${fileName}"` 
-        : 'attachment'
-    };
-
-    const messageData = createPostMessage(MessageType.RESPONSE, this.requestId, {
-      path: this.path,
-      secretKey: this.secretKey,
-      status: this.statusCode,
-      statusText: getStatusText(this.statusCode),
-      headers: fileHeaders,
-      fileData: {
-        content: base64Content,
-        mimeType,
-        fileName
-      },
-      requireAck
-    });
-
-    // If acknowledgment not required, send directly and return true
-    if (!requireAck) {
-      this.sendMessage(messageData);
-      return true;
+    // Set file-related headers
+    this.setHeader(HttpHeader.CONTENT_TYPE, mimeType);
+    if (fileName) {
+      this.setHeader(HttpHeader.CONTENT_DISPOSITION, `attachment; filename="${fileName}"`);
+    } else {
+      this.setHeader(HttpHeader.CONTENT_DISPOSITION, 'attachment');
     }
 
-    // Acknowledgment required, wait for client response
-    return new Promise((resolve) => {
-      this._setOnAckCallback(resolve);
-      this.sendMessage(messageData);
+    // Create file stream with autoResolve enabled
+    const stream = new IframeFileWritableStream({
+      filename: fileName || 'file',
+      mimeType,
+      chunked: false, // File is sent in one chunk
+      autoResolve: true, // Client will automatically resolve to fileData
+      next: async () => {
+        // Send file content as a single chunk
+        return {
+          data: fileContent,
+          done: true
+        };
+      }
     });
+
+    // Send stream (this will handle the requireAck logic internally and set _sent)
+    await this.sendStream(stream);
+
+    // For backward compatibility, return true if requireAck is false
+    // Note: sendStream doesn't return a boolean, but sendFile needs to maintain its API
+    // Since sendStream handles everything, we return true
+    return true;
   }
 
   /**
@@ -189,7 +191,8 @@ export class ServerResponseImpl implements ServerResponse {
       targetWindow: this.targetWindow,
       targetOrigin: this.targetOrigin,
       secretKey: this.secretKey,
-      channel: this.channel
+      channel: this.channel,
+      serverId: this.serverId
     });
 
     // Start stream transmission

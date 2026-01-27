@@ -1,0 +1,7 @@
+{
+  "name": "@request-iframe/react",
+  "version": "0.0.1",
+  "main": "./library/index.js",
+  "module": "./library/index.js",
+  "typings": "./library/index.d.ts"
+}

@@ -2,7 +2,7 @@ import { PostMessageData } from '../types';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
 import { getOrCreateMessageChannel, releaseMessageChannel } from '../utils/cache';
 import { isCompatibleVersion } from '../utils';
-import { MessageType, DefaultTimeout, ProtocolVersion, Messages, formatMessage } from '../constants';
+import { MessageType, DefaultTimeout, ProtocolVersion, Messages, formatMessage, MessageRole } from '../constants';
 
 /**
  * Stream message handler callback
@@ -37,6 +37,8 @@ export interface ClientServerOptions {
   ackTimeout?: number;
   /** Protocol version validator (optional, uses built-in validation by default) */
   versionValidator?: VersionValidator;
+  /** Whether to automatically open when creating the client server. Default is true. */
+  autoOpen?: boolean;
 }
 
 /**
@@ -64,16 +66,18 @@ export class RequestIframeClientServer {
   /** Whether opened */
   private _isOpen = false;
 
-  public constructor(options?: ClientServerOptions) {
-    this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.SERVER_ACK;
+  public constructor(options?: ClientServerOptions, instanceId?: string) {
+    this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.versionValidator = options?.versionValidator ?? isCompatibleVersion;
     
     // Get or create shared channel and create dispatcher
     const channel = getOrCreateMessageChannel(options?.secretKey);
-    this.dispatcher = new MessageDispatcher(channel);
+    this.dispatcher = new MessageDispatcher(channel, MessageRole.CLIENT, instanceId);
     
-    // Auto-open by default
-    this.open();
+    // Auto-open by default (unless explicitly set to false)
+    if (options?.autoOpen !== false) {
+      this.open();
+    }
   }
 
   /**
@@ -167,10 +171,24 @@ export class RequestIframeClientServer {
       )
     );
 
-    // Handle stream messages (stream_*)
+    // Handle stream_start messages (route to handleClientResponse so it reaches send callback)
+    // Note: stream_start is handled in send callback, not through streamCallback
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
-        (type: string) => type.startsWith('stream_'),
+        MessageType.STREAM_START,
+        (data, context) => {
+          // Route to handleClientResponse so it reaches send callback
+          this.handleClientResponse(data, context);
+          // Don't call streamCallback here - stream_start is handled in send callback
+        },
+        handlerOptions
+      )
+    );
+
+    // Handle other stream messages (stream_data, stream_end, etc.)
+    this.unregisterFns.push(
+      this.dispatcher.registerHandler(
+        (type: string) => type.startsWith('stream_') && type !== MessageType.STREAM_START,
         (data, context) => this.streamCallback?.(data, context),
         handlerOptions
       )
@@ -201,8 +219,8 @@ export class RequestIframeClientServer {
       if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
         return;
       }
-      // ack and async don't delete pending
-      if (data.type === MessageType.ACK || data.type === MessageType.ASYNC) {
+      // ack, async, and stream_start don't delete pending (stream_start needs to keep pending for stream_data/stream_end)
+      if (data.type === MessageType.ACK || data.type === MessageType.ASYNC || data.type === MessageType.STREAM_START) {
         pending.resolve(data);
         return;
       }

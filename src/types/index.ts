@@ -1,9 +1,11 @@
+import { MessageRoleValue } from '../constants';
+
 /**
  * Request default configuration
  * Can be set when creating requestIframeClient, and can be overridden on each request
  */
 export interface RequestDefaults {
-  /** ACK confirmation timeout (milliseconds), timeout for waiting for the other party to acknowledge the message, default 500 */
+  /** ACK confirmation timeout (milliseconds), timeout for waiting for the other party to acknowledge the message, default 1000 */
   ackTimeout?: number;
   /** Request timeout (milliseconds), timeout for waiting for the server to return the result, default 5000 */
   timeout?: number;
@@ -12,13 +14,26 @@ export interface RequestDefaults {
 }
 
 /**
+ * Headers value type (supports static value or dynamic function)
+ */
+export type HeaderValue = string | string[] | ((config: RequestConfig) => string | string[]);
+
+/**
+ * Headers configuration type
+ */
+export type HeadersConfig = Record<string, HeaderValue>;
+
+/**
  * sender.send configuration options
  */
 export interface RequestOptions extends RequestDefaults {
   /** Custom request ID */
   requestId?: string;
-  /** Request headers */
-  headers?: Record<string, string>;
+  /** 
+   * Request headers (can override initial headers from RequestIframeClientOptions).
+   * Values can be static strings/arrays or functions that dynamically generate headers based on request config.
+   */
+  headers?: HeadersConfig;
   /** Request cookies */
   cookies?: Record<string, string>;
 }
@@ -32,7 +47,7 @@ export interface RequestConfig extends RequestOptions {
   /** Request body */
   body?: Record<string, any>;
   /** Request headers */
-  headers?: Record<string, string>;
+  headers?: HeadersConfig;
   /** Request cookies */
   cookies?: Record<string, string>;
 }
@@ -170,6 +185,18 @@ export interface PostMessageData {
   statusText?: string;
   /** Whether client confirmation of receipt is required (for response/error messages) */
   requireAck?: boolean;
+  /** 
+   * Message sender role
+   * - 'client': message sent by client
+   * - 'server': message sent by server
+   * Used to prevent message routing confusion when client and server are in the same window
+   */
+  role?: MessageRoleValue;
+  /** 
+   * ID of the instance that sent this message
+   * Used to identify which client/server instance generated the message
+   */
+  senderId?: string;
 }
 
 /**
@@ -316,6 +343,14 @@ export type ServerEventName = 'request' | 'ack' | 'async' | 'response' | 'error'
  * Client interface
  */
 export interface RequestIframeClient {
+  /** Unique instance ID */
+  readonly id: string;
+  /** Whether message handling is enabled */
+  readonly isOpen: boolean;
+  /** Enable message handling (register message handler) */
+  open(): void;
+  /** Disable message handling (unregister message handler, but don't release resources) */
+  close(): void;
   /** Interceptors (only effective for send) */
   interceptors: {
     request: import('../interceptors').RequestInterceptorManager;
@@ -357,6 +392,8 @@ export interface RequestIframeClient {
    * Clear all cookies
    */
   clearCookies(): void;
+  /** Destroy client (close and release resources) */
+  destroy(): void;
 }
 
 /**
@@ -384,6 +421,8 @@ export interface RequestIframeClientServer {
  * Server interface (used on server side, handles requests and responses)
  */
 export interface RequestIframeServer {
+  /** Unique instance ID */
+  readonly id: string;
   /** Message isolation key (read-only) */
   readonly secretKey?: string;
   /** Whether message handling is enabled */
@@ -400,11 +439,11 @@ export interface RequestIframeServer {
   use(middleware: Middleware): void;
   use(path: PathMatcher, middleware: Middleware): void;
   /** Register route handler */
-  on(path: string, handler: ServerHandler): void;
+  on(path: string, handler: ServerHandler): (() => void);
   /** Unregister route handler */
-  off(path: string): void;
+  off(path: string|string[]): void;
   /** Batch register route handlers (via key: value object) */
-  map(handlers: Record<string, ServerHandler>): void;
+  map(handlers: Record<string, ServerHandler>): (() => void);
   /** Destroy server (close and release resources) */
   destroy(): void;
 }
@@ -423,6 +462,17 @@ export interface RequestIframeClientOptions extends RequestDefaults {
    * If true, logs will be printed at various points such as before and after requests.
    */
   trace?: boolean;
+  /**
+   * Initial request headers.
+   * Values can be static strings/arrays or functions that dynamically generate headers based on request config.
+   * Headers from individual requests will override these initial headers.
+   */
+  headers?: HeadersConfig;
+  /**
+   * Whether to automatically open (start message handling) when creating the client.
+   * Default is true. If set to false, you need to manually call client.open() to start message handling.
+   */
+  autoOpen?: boolean;
 }
 
 /**
@@ -439,4 +489,9 @@ export interface RequestIframeServerOptions extends Pick<RequestDefaults, 'ackTi
    * If true, logs will be printed at various points such as before and after requests, server receive/respond, etc.
    */
   trace?: boolean;
+  /**
+   * Whether to automatically open (start message handling) when creating the server.
+   * Default is true. If set to false, you need to manually call server.open() to start message handling.
+   */
+  autoOpen?: boolean;
 }

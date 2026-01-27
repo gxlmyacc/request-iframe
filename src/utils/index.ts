@@ -6,6 +6,13 @@ export function generateRequestId(): string {
 }
 
 /**
+ * Generate unique instance ID
+ */
+export function generateInstanceId(): string {
+  return `inst_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+}
+
+/**
  * Derive targetOrigin from iframe.src
  */
 export function getIframeTargetOrigin(iframe: HTMLIFrameElement): string {
@@ -19,6 +26,10 @@ export function getIframeTargetOrigin(iframe: HTMLIFrameElement): string {
   }
 }
 
+
+export function isPromise<T>(value: any): value is Promise<T>  {
+  return value !== null && typeof value === 'object' && 'then' in value;
+}
 // Export protocol-related functions
 export {
   createPostMessage,
