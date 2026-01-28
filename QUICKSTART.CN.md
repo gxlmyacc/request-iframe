@@ -172,20 +172,47 @@ server.on('/api/download', async (req, res) => {
 
 // Client 端
 const response = await client.send('/api/download', {});
-if (response.fileData) {
+if (response.data instanceof File || response.data instanceof Blob) {
+  const file = response.data instanceof File ? response.data : null;
+  const fileName = file?.name || 'download';
+
   // 创建下载链接
-  const blob = new Blob(
-    [atob(response.fileData.content)], 
-    { type: response.fileData.mimeType }
-  );
-  const url = URL.createObjectURL(blob);
-  
+  const url = URL.createObjectURL(response.data);
+
   // 触发下载
   const a = document.createElement('a');
   a.href = url;
-  a.download = response.fileData.fileName || 'download';
+  a.download = fileName;
   a.click();
+  URL.revokeObjectURL(url);
 }
+```
+
+### 文件上传（Client → Server）
+
+Client 向 Server 发送文件仅走**流式**。默认 `autoResolve: true`，Server 会在进入 handler 前把文件解析成 `File/Blob` 放到 `req.body`。
+
+```typescript
+// Client 端
+const file = new File(['Hello Upload'], 'upload.txt', { type: 'text/plain' });
+await client.send('/api/upload', file); // File/Blob 会自动分发到 sendFile（走流式）
+
+// Server 端
+server.on('/api/upload', async (req, res) => {
+  const blob = req.body as Blob;
+  const text = await blob.text();
+  res.send({ ok: true, text });
+});
+```
+
+### 路由参数（req.params）
+
+支持 Express 风格的 `:param` 路由参数，解析结果在 `req.params`。
+
+```typescript
+server.on('/api/users/:id', (req, res) => {
+  res.send({ userId: req.params.id });
+});
 ```
 
 ### 调试模式

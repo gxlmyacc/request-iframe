@@ -11,6 +11,12 @@ export interface RequestDefaults {
   timeout?: number;
   /** Async request timeout (milliseconds), timeout after the server indicates it's an async task, default 120000 */
   asyncTimeout?: number;
+  /** 
+   * Whether to directly return response.data instead of the full Response object.
+   * If true, send() will return Promise<T> instead of Promise<Response<T>>.
+   * Default is false.
+   */
+  returnData?: boolean;
 }
 
 /**
@@ -50,8 +56,8 @@ export interface RequestOptions extends RequestDefaults {
 export interface RequestConfig extends RequestOptions {
   /** Interaction event ID (equivalent to path) */
   path: string;
-  /** Request body */
-  body?: Record<string, any>;
+  /** Request body (plain object, File, Blob, or stream for sendStream) */
+  body?: any;
   /** Request headers */
   headers?: HeadersConfig;
   /** Request cookies */
@@ -198,6 +204,8 @@ export interface PostMessageData {
    * Used to ensure messages are routed to the correct instance and avoid message confusion
    */
   targetId?: string;
+  /** Stream ID (when request body is a stream, client sends stream; server receives stream_start next) */
+  streamId?: string;
 }
 
 /**
@@ -206,12 +214,16 @@ export interface PostMessageData {
 export interface ServerRequest {
   /** Request body */
   body: any;
+  /** Request stream (when client sent via sendStream) */
+  stream?: import('../stream').IIframeReadableStream;
   /** Request headers */
   headers: Record<string, string>;
   /** Request cookies */
   cookies: Record<string, string>;
   /** Request path */
   path: string;
+  /** Path parameters extracted from route pattern (e.g., { id: '123' } for '/api/users/:id' and '/api/users/123') */
+  params: Record<string, string>;
   /** Request ID */
   requestId: string;
   /** Sender origin */
@@ -344,6 +356,8 @@ export type ServerEventName = 'request' | 'ack' | 'async' | 'response' | 'error'
  * Client interface
  */
 export interface RequestIframeClient {
+  /** Target window */
+  readonly targetWindow: Window;
   /** Unique instance ID */
   readonly id: string;
   /** Whether message handling is enabled */
@@ -357,12 +371,24 @@ export interface RequestIframeClient {
     request: import('../interceptors').RequestInterceptorManager;
     response: import('../interceptors').ResponseInterceptorManager;
   };
-  /** Send request */
+  /** Send request (body can be plain data, File, Blob, or stream; auto-dispatches to sendFile/sendStream when applicable) */
   send<T = any>(
     path: string,
-    body?: Record<string, any>,
+    body?: any,
     options?: RequestOptions
-  ): Promise<Response<T>>;
+  ): Promise<Response<T> | T>;
+  /** Send file as request body (stream only; server receives stream or auto-resolved File/Blob via autoResolve) */
+  sendFile<T = any>(
+    path: string,
+    content: string | Blob | File,
+    options?: RequestOptions & { mimeType?: string; fileName?: string; autoResolve?: boolean }
+  ): Promise<Response<T> | T>;
+  /** Send stream as request body (server receives readable stream) */
+  sendStream<T = any>(
+    path: string,
+    stream: import('../stream').IframeWritableStream,
+    options?: RequestOptions
+  ): Promise<Response<T> | T>;
   /** Check if server is reachable */
   isConnect(): Promise<boolean>;
   /** 

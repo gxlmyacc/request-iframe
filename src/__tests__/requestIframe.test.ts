@@ -2,6 +2,7 @@ import { requestIframeClient, clearRequestIframeClientCache } from '../api/clien
 import { requestIframeServer, clearRequestIframeServerCache } from '../api/server';
 import { RequestConfig, Response, ErrorResponse, PostMessageData } from '../types';
 import { HttpHeader, MessageRole, Messages } from '../constants';
+import { IframeWritableStream } from '../stream';
 
 /**
  * Create test iframe
@@ -20,6 +21,18 @@ function cleanupIframe(iframe: HTMLIFrameElement): void {
   if (iframe.parentNode) {
     iframe.parentNode.removeChild(iframe);
   }
+}
+
+/**
+ * Convert Blob to text (for assertions)
+ */
+function blobToText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = reject;
+    reader.readAsText(blob);
+  });
 }
 
 describe('requestIframeClient and requestIframeServer', () => {
@@ -106,6 +119,251 @@ describe('requestIframeClient and requestIframeServer', () => {
       expect(response.data).toEqual({ result: 'success' });
       expect(response.status).toBe(200);
       expect(mockContentWindow.postMessage).toHaveBeenCalled();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should return response.data when returnData is true in options', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      const data = await client.send('test', { param: 'value' }, { ackTimeout: 1000, returnData: true });
+      // Should return data directly, not Response object
+      expect(data).toEqual({ result: 'success' });
+      expect((data as any).status).toBeUndefined();
+      expect((data as any).requestId).toBeUndefined();
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should return full Response when returnData is false', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      const response = await client.send('test', { param: 'value' }, { ackTimeout: 1000, returnData: false });
+      // Should return full Response object
+      expect(response).toHaveProperty('data');
+      expect(response).toHaveProperty('status');
+      expect(response).toHaveProperty('statusText');
+      expect(response).toHaveProperty('requestId');
+      expect(response.data).toEqual({ result: 'success' });
+      expect(response.status).toBe(200);
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should use default returnData from RequestIframeClientOptions', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      // Create client with returnData: true in options
+      const client = requestIframeClient(iframe, { returnData: true });
+      const server = requestIframeServer();
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      // Should return data directly without specifying returnData in send options
+      const data = await client.send('test', { param: 'value' }, { ackTimeout: 1000 });
+      expect(data).toEqual({ result: 'success' });
+      expect((data as any).status).toBeUndefined();
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should allow overriding default returnData in send options', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      // Create client with returnData: true in options
+      const client = requestIframeClient(iframe, { returnData: true });
+      const server = requestIframeServer();
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      // Override with returnData: false in send options
+      const response = await client.send('test', { param: 'value' }, { ackTimeout: 1000, returnData: false });
+      // Should return full Response object despite default being true
+      expect(response).toHaveProperty('data');
+      expect(response).toHaveProperty('status');
+      expect(response.data).toEqual({ result: 'success' });
+      
       server.destroy();
       cleanupIframe(iframe);
     });
@@ -525,6 +783,314 @@ describe('requestIframeClient and requestIframeServer', () => {
     });
   });
 
+  describe('secretKey message isolation', () => {
+    it('should successfully communicate when client and server use the same secretKey', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            // Verify secretKey is in message
+            expect(msg.secretKey).toBe('test-key');
+            // Verify path is NOT prefixed with secretKey
+            expect(msg.path).toBe('test');
+            
+            // Send ACK first
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  secretKey: 'test-key',
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            // Then send response
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    secretKey: 'test-key',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { secretKey: 'test-key' });
+      const server = requestIframeServer({ secretKey: 'test-key' });
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      const response = await client.send('test', { param: 'value' }, { ackTimeout: 1000 });
+      expect(response.data).toEqual({ result: 'success' });
+      expect(response.status).toBe(200);
+      expect(mockContentWindow.postMessage).toHaveBeenCalled();
+      
+      // Verify the sent message has secretKey
+      const sentMessage = (mockContentWindow.postMessage as jest.Mock).mock.calls[0][0];
+      expect(sentMessage.secretKey).toBe('test-key');
+      expect(sentMessage.path).toBe('test'); // Path should NOT be prefixed
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should NOT communicate when client and server use different secretKeys', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { secretKey: 'client-key' });
+      const server = requestIframeServer({ secretKey: 'server-key' });
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      // Request should timeout because server won't respond (different secretKey)
+      await expect(
+        client.send('test', { param: 'value' }, { ackTimeout: 100 })
+      ).rejects.toMatchObject({
+        code: 'ACK_TIMEOUT'
+      });
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should NOT communicate when client has secretKey but server does not', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { secretKey: 'client-key' });
+      const server = requestIframeServer(); // No secretKey
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      // Request should timeout because server won't respond (different secretKey)
+      await expect(
+        client.send('test', { param: 'value' }, { ackTimeout: 100 })
+      ).rejects.toMatchObject({
+        code: 'ACK_TIMEOUT'
+      });
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should NOT communicate when client has no secretKey but server has secretKey', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe); // No secretKey
+      const server = requestIframeServer({ secretKey: 'server-key' });
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      // Request should timeout because server won't respond (different secretKey)
+      await expect(
+        client.send('test', { param: 'value' }, { ackTimeout: 100 })
+      ).rejects.toMatchObject({
+        code: 'ACK_TIMEOUT'
+      });
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should successfully communicate when both client and server have no secretKey', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            // Verify secretKey is NOT in message
+            expect(msg.secretKey).toBeUndefined();
+            // Verify path is NOT prefixed
+            expect(msg.path).toBe('test');
+            
+            // Send ACK first
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            // Then send response
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe); // No secretKey
+      const server = requestIframeServer(); // No secretKey
+
+      server.on('test', (req, res) => {
+        res.send({ result: 'success' });
+      });
+
+      const response = await client.send('test', { param: 'value' }, { ackTimeout: 1000 });
+      expect(response.data).toEqual({ result: 'success' });
+      expect(response.status).toBe(200);
+      expect(mockContentWindow.postMessage).toHaveBeenCalled();
+      
+      // Verify the sent message has no secretKey
+      const sentMessage = (mockContentWindow.postMessage as jest.Mock).mock.calls[0][0];
+      expect(sentMessage.secretKey).toBeUndefined();
+      expect(sentMessage.path).toBe('test'); // Path should NOT be prefixed
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle path correctly with secretKey (path should not be prefixed)', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            // Verify path is NOT prefixed with secretKey
+            expect(msg.path).toBe('api/users');
+            expect(msg.secretKey).toBe('my-app');
+            
+            // Send ACK first
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  secretKey: 'my-app',
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            // Then send response
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { users: [] },
+                    status: 200,
+                    statusText: 'OK',
+                    secretKey: 'my-app',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { secretKey: 'my-app' });
+      const server = requestIframeServer({ secretKey: 'my-app' });
+
+      // Server registers handler with original path (not prefixed)
+      server.on('api/users', (req, res) => {
+        res.send({ users: [] });
+      });
+
+      // Client sends request with original path (not prefixed)
+      const response = await client.send('api/users', undefined, { ackTimeout: 1000 });
+      expect(response.data).toEqual({ users: [] });
+      
+      // Verify path in sent message is NOT prefixed
+      const sentMessage = (mockContentWindow.postMessage as jest.Mock).mock.calls[0][0];
+      expect(sentMessage.path).toBe('api/users');
+      expect(sentMessage.secretKey).toBe('my-app');
+      
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+  });
+
   describe('Middleware', () => {
     it('should support global middleware', async () => {
       const origin = 'https://example.com';
@@ -701,7 +1267,7 @@ describe('requestIframeClient and requestIframeServer', () => {
   });
 
   describe('sendFile', () => {
-    it('should support sending file (base64 encoded)', async () => {
+    it('should support sending file (stream)', async () => {
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
 
@@ -1068,6 +1634,157 @@ describe('requestIframeClient and requestIframeServer', () => {
 
       cleanupIframe(iframe);
     }, 20000);
+  });
+
+  describe('Path parameters', () => {
+    it('should extract path parameters from route pattern', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('/api/users/:id', (req, res) => {
+        expect(req.params.id).toBe('123');
+        expect(req.path).toBe('/api/users/123');
+        res.send({ userId: req.params.id });
+      });
+
+      const resp = await client.send<any>('/api/users/123');
+      expect((resp as any).data.userId).toBe('123');
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should extract multiple path parameters', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('/api/users/:userId/posts/:postId', (req, res) => {
+        expect(req.params.userId).toBe('456');
+        expect(req.params.postId).toBe('789');
+        res.send({ userId: req.params.userId, postId: req.params.postId });
+      });
+
+      const resp = await client.send<any>('/api/users/456/posts/789');
+      expect((resp as any).data.userId).toBe('456');
+      expect((resp as any).data.postId).toBe('789');
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should return empty params for exact path match', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('/api/users', (req, res) => {
+        expect(req.params).toEqual({});
+        expect(req.path).toBe('/api/users');
+        res.send({ success: true });
+      });
+
+      const resp = await client.send<any>('/api/users');
+      expect((resp as any).data.success).toBe(true);
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should work with stream requests', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('/api/upload/:fileId', async (req, res) => {
+        expect(req.params.fileId).toBe('file-123');
+        expect(req.stream).toBeDefined();
+        const chunks: any[] = [];
+        for await (const chunk of req.stream as any) {
+          chunks.push(chunk);
+        }
+        res.send({ fileId: req.params.fileId, chunks });
+      });
+
+      const stream = new IframeWritableStream({
+        iterator: async function* () {
+          yield 'chunk1';
+          yield 'chunk2';
+        }
+      });
+
+      const resp = await client.sendStream<any>('/api/upload/file-123', stream);
+      expect((resp as any).data.fileId).toBe('file-123');
+      expect((resp as any).data.chunks).toEqual(['chunk1', 'chunk2']);
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
   });
 
   describe('server.map', () => {
@@ -2128,6 +2845,239 @@ describe('requestIframeClient and requestIframeServer', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Should not crash
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+  });
+
+  describe('client send various body types', () => {
+    it('should send plain object and server receives JSON + Content-Type', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('echoObject', (req, res) => {
+        expect(req.headers[HttpHeader.CONTENT_TYPE]).toBe('application/json');
+        res.send({ ok: true, received: req.body });
+      });
+
+      const resp = await client.send<any>('echoObject', { a: 1 });
+      expect((resp as any).data.ok).toBe(true);
+      expect((resp as any).data.received).toEqual({ a: 1 });
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should send string and server receives text/plain Content-Type', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('echoText', (req, res) => {
+        expect(req.headers[HttpHeader.CONTENT_TYPE]).toContain('text/plain');
+        res.send({ received: req.body, type: typeof req.body });
+      });
+
+      const resp = await client.send<any>('echoText', 'hello');
+      expect((resp as any).data.received).toBe('hello');
+      expect((resp as any).data.type).toBe('string');
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should send URLSearchParams and server receives correct Content-Type', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('echoParams', (req, res) => {
+        expect(req.headers[HttpHeader.CONTENT_TYPE]).toBe('application/x-www-form-urlencoded');
+        // URLSearchParams should be structured-cloneable in modern browsers
+        const value = req.body?.toString?.() ?? String(req.body);
+        res.send({ received: value });
+      });
+
+      const params = new URLSearchParams({ a: '1', b: '2' });
+      const resp = await client.send<any>('echoParams', params as any);
+      expect((resp as any).data.received).toContain('a=1');
+      expect((resp as any).data.received).toContain('b=2');
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should auto-dispatch File/Blob body to client.sendFile and server receives file via stream (autoResolve)', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('uploadFile', async (req, res) => {
+        expect(req.body).toBeDefined();
+        const blob = req.body as Blob;
+        const text = await blobToText(blob);
+        res.send({ ok: true, text });
+      });
+
+      const blob = new Blob(['Hello Upload'], { type: 'text/plain' });
+      const resp = await client.send<any>('uploadFile', blob);
+      expect((resp as any).data.ok).toBe(true);
+      expect((resp as any).data.text).toBe('Hello Upload');
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should send stream from client to server and server receives req.stream', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('uploadStream', async (req, res) => {
+        expect(req.stream).toBeDefined();
+        const chunks: any[] = [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for await (const chunk of req.stream as any) {
+          chunks.push(chunk);
+        }
+        res.send({ chunks });
+      });
+
+      const stream = new IframeWritableStream({
+        iterator: async function* () {
+          yield 'c1';
+          yield 'c2';
+          yield 'c3';
+        }
+      });
+
+      const resp = await client.sendStream<any>('uploadStream', stream);
+      expect((resp as any).data.chunks).toEqual(['c1', 'c2', 'c3']);
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should support client.sendFile with autoResolve (server receives File/Blob in req.body)', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', { value: mockContentWindow, writable: true });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('uploadFileStream', async (req, res) => {
+        // autoResolve: server should get File/Blob directly
+        expect(req.body).toBeDefined();
+        expect(req.stream).toBeUndefined();
+        const blob = req.body as Blob;
+        const text = await blobToText(blob);
+        res.send({ ok: true, text });
+      });
+
+      const blob = new Blob(['Hello Upload Stream'], { type: 'text/plain' });
+      const resp = await client.sendFile<any>('uploadFileStream', blob, {
+        autoResolve: true,
+        mimeType: 'text/plain',
+        fileName: 'upload.txt'
+      });
+      expect((resp as any).data.ok).toBe(true);
+      expect((resp as any).data.text).toBe('Hello Upload Stream');
+
+      client.destroy();
       server.destroy();
       cleanupIframe(iframe);
     });

@@ -52,37 +52,78 @@ export function useClient(
   options?: RequestIframeClientOptions,
   deps?: readonly unknown[]
 ): RequestIframeClient | null {
+  const clientRef = useRef<RequestIframeClient | null>(null);
   const [client, setClient] = useState<RequestIframeClient | null>(null);
+  const lastTargetRef = useRef<HTMLIFrameElement | Window | null>(null);
+  const targetFnOrRefRef = useRef(targetFnOrRef);
+  const optionsRef = useRef(options);
 
+  /** Keep latest inputs without re-creating effect deps */
+  targetFnOrRefRef.current = targetFnOrRef;
+  optionsRef.current = options;
+
+  const getTarget = useCallback(() => {
+    return typeof targetFnOrRefRef.current === 'function'
+      ? targetFnOrRefRef.current()
+      : targetFnOrRefRef.current.current;
+  }, []);
+
+  /**
+   * Snapshot the current target during render (pure read).
+   * We use this value as an effect dependency so the effect only runs when
+   * the target actually changes (avoids StrictMode update-depth loops).
+   */
+  const target = getTarget();
+
+  const destroy = useCallback(() => {
+    if (clientRef.current) {
+      clientRef.current.destroy();
+      clientRef.current = null;
+    }
+    lastTargetRef.current = null;
+  }, []);
+
+  /**
+   * Create/destroy client in effect to be compatible with React 18 StrictMode
+   * and concurrent rendering (avoid render-phase side effects).
+   */
   useEffect(() => {
-    // Get current target
-    const target = typeof targetFnOrRef === 'function' 
-      ? targetFnOrRef() 
-      : targetFnOrRef.current;
+    /** If target unchanged, keep current client */
+    if (target === lastTargetRef.current) return;
 
-    // Destroy existing client if it exists
-    if (client) {
-      client.destroy();
-      setClient(null);
+    /** Target changed: destroy old client and maybe create a new one */
+    if (clientRef.current) {
+      clientRef.current.destroy();
+      clientRef.current = null;
     }
 
-    // Only create client if target is available
+    lastTargetRef.current = target;
+
     if (!target) {
+      setClient(null);
       return;
     }
 
-    // Create new client instance
-    const newClient = requestIframeClient(target, options);
+    const newClient = requestIframeClient(target, optionsRef.current);
+    clientRef.current = newClient;
     setClient(newClient);
 
-    // Cleanup: destroy client on unmount
     return () => {
-      if (newClient) {
+      /** Cleanup only if it's still the current client */
+      if (clientRef.current === newClient) {
         newClient.destroy();
-        setClient(null);
+        clientRef.current = null;
+        lastTargetRef.current = null;
       }
     };
-  }, deps !== undefined ? deps : []);
+  }, (deps ? [...deps, target] : [target]) as unknown[]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      destroy();
+    };
+  }, []);
 
   return client;
 }
@@ -114,21 +155,46 @@ export function useServer(
   options?: RequestIframeServerOptions,
   deps?: readonly unknown[]
 ): RequestIframeServer | null {
+  const serverRef = useRef<RequestIframeServer | null>(null);
   const [server, setServer] = useState<RequestIframeServer | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const destroy = useCallback(() => {
+    if (serverRef.current) {
+      serverRef.current.destroy();
+      serverRef.current = null;
+    }
+  }, []);
 
+  /**
+   * Create/destroy server in effect to be compatible with React 18 StrictMode
+   * and concurrent rendering (avoid render-phase side effects).
+   */
   useEffect(() => {
-    // Create server instance
-    const newServer = requestIframeServer(options);
+    if (serverRef.current) {
+      serverRef.current.destroy();
+      serverRef.current = null;
+    }
+
+    const newServer = requestIframeServer(optionsRef.current);
+    serverRef.current = newServer;
     setServer(newServer);
 
-    // Cleanup: destroy server on unmount
     return () => {
-      if (newServer) {
+      if (serverRef.current === newServer) {
         newServer.destroy();
-        setServer(null);
+        serverRef.current = null;
       }
     };
-  }, deps !== undefined ? deps : []); // Only create once on mount by default
+  }, (deps ?? []) as unknown[]);
+
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      destroy();
+    };
+  }, []);
 
   return server;
 }

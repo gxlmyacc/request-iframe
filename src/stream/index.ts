@@ -11,7 +11,8 @@ export { IframeFileReadableStream } from './file-stream';
 
 // Type checking utility functions
 import { IframeReadableStream } from './readable-stream';
-import { IframeFileReadableStream } from './file-stream';
+import { IframeFileReadableStream, IframeFileWritableStream } from './file-stream';
+import { IframeWritableStream } from './writable-stream';
 import { IIframeReadableStream, IIframeFileReadableStream } from './types';
 
 /**
@@ -24,6 +25,20 @@ export function isIframeReadableStream(value: any): value is IIframeReadableStre
 /**
  * Check if value is an IframeFileReadableStream (file stream)
  */
-export function isIframeFileStream(value: any): value is IIframeFileReadableStream {
+export function isIframeFileReadableStream(value: any): value is IIframeFileReadableStream {
   return value instanceof IframeFileReadableStream;
+}
+
+/**
+ * Check if value is an IframeWritableStream (includes IframeFileWritableStream)
+ */
+export function isIframeWritableStream(value: any): value is IframeWritableStream {
+  return value instanceof IframeWritableStream || value instanceof IframeFileWritableStream;
+}
+
+/**
+ * Check if value is an IframeFileWritableStream (file writable stream)
+ */
+export function isIframeFileWritableStream(value: any): value is IframeFileWritableStream {
+  return value instanceof IframeFileWritableStream;
 }

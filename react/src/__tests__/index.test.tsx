@@ -221,14 +221,18 @@ describe('React Hooks', () => {
         configurable: true
       });
 
-      const { result, rerender } = renderHook(() => useClient(() => iframeRef.current));
+      type Props = { ver: number };
+      const { result, rerender } = renderHook(
+        ({ ver }: Props) => useClient(() => iframeRef.current, undefined, [ver]),
+        { initialProps: { ver: 0 } as Props }
+      );
 
       // Initially null (ref not set)
       expect(result.current).toBeNull();
 
       // Set ref
       iframeRef.current = iframe;
-      rerender();
+      rerender({ ver: 1 } as Props);
 
       await waitFor(() => {
         expect(result.current).toBeDefined();
@@ -302,30 +306,38 @@ describe('React Hooks', () => {
   });
 
   describe('useServer', () => {
-    it('should create server instance', () => {
+    it('should create server instance', async () => {
       const { result } = renderHook(() => useServer());
       
-      expect(result.current).toBeDefined();
-      if (result.current) {
-        expect(result.current.isOpen).toBe(true);
-      }
+      await waitFor(() => {
+        expect(result.current).toBeDefined();
+        expect(result.current).not.toBeNull();
+        if (result.current) {
+          expect(result.current.isOpen).toBe(true);
+        }
+      }, { timeout: 2000 });
     });
 
-    it('should create server with options', () => {
+    it('should create server with options', async () => {
       const options = { secretKey: 'test-key', ackTimeout: 1000 };
       const { result } = renderHook(() => useServer(options));
       
-      expect(result.current).toBeDefined();
-      if (result.current) {
-        expect(result.current.secretKey).toBe('test-key');
-      }
+      await waitFor(() => {
+        expect(result.current).toBeDefined();
+        expect(result.current).not.toBeNull();
+        if (result.current) {
+          expect(result.current.secretKey).toBe('test-key');
+        }
+      }, { timeout: 2000 });
     });
 
     it('should destroy server on unmount', async () => {
       const { result, unmount } = renderHook(() => useServer());
+      await waitFor(() => {
+        expect(result.current).toBeDefined();
+        expect(result.current).not.toBeNull();
+      }, { timeout: 2000 });
       const server = result.current;
-      
-      expect(server).toBeDefined();
       
       unmount();
       
@@ -335,16 +347,20 @@ describe('React Hooks', () => {
       }
     });
 
-    it('should create server only once on mount', () => {
+    it('should create server only once on mount', async () => {
       const { result, rerender } = renderHook(() => useServer());
+      await waitFor(() => {
+        expect(result.current).toBeDefined();
+        expect(result.current).not.toBeNull();
+      }, { timeout: 2000 });
       const server1 = result.current;
-      
-      expect(server1).toBeDefined();
       
       rerender();
       
       // Should return the same instance when deps is not provided (default empty array)
-      expect(result.current).toBeDefined();
+      await waitFor(() => {
+        expect(result.current).toBeDefined();
+      }, { timeout: 2000 });
       // Note: When deps is not provided, useEffect runs only once, so server should be the same
       // But if deps changes, a new server might be created
       expect(result.current).toBe(server1);
@@ -373,7 +389,7 @@ describe('React Hooks', () => {
   });
 
   describe('useServerHandler', () => {
-    it('should register handler when server is available', () => {
+    it('should register handler when server is available', async () => {
       const handler = jest.fn((req, res) => {
         res.send({ success: true });
       });
@@ -388,7 +404,10 @@ describe('React Hooks', () => {
       // Verify handler is registered by checking server internals
       // Since we can't easily test the full message flow, we just verify
       // that the hook doesn't throw and the server is created
-      expect(serverInstance).toBeDefined();
+      await waitFor(() => {
+        expect(serverInstance).toBeDefined();
+        expect(serverInstance).not.toBeNull();
+      }, { timeout: 2000 });
       expect(handler).not.toHaveBeenCalled(); // Handler not called yet, just registered
     });
 
@@ -537,7 +556,7 @@ describe('React Hooks', () => {
   });
 
   describe('useServerHandlerMap', () => {
-    it('should register handlers using map when server is available', () => {
+    it('should register handlers using map when server is available', async () => {
       const handlers = {
         'api/user': jest.fn((req, res) => res.send({ user: 'test' })),
         'api/post': jest.fn((req, res) => res.send({ post: 'test' }))
@@ -551,7 +570,10 @@ describe('React Hooks', () => {
       });
 
       // Verify server is created and handlers are registered
-      expect(serverInstance).toBeDefined();
+      await waitFor(() => {
+        expect(serverInstance).toBeDefined();
+        expect(serverInstance).not.toBeNull();
+      }, { timeout: 2000 });
       // Handlers not called yet, just registered
       expect(handlers['api/user']).not.toHaveBeenCalled();
       expect(handlers['api/post']).not.toHaveBeenCalled();

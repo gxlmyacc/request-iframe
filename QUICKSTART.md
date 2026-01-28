@@ -172,20 +172,47 @@ server.on('/api/download', async (req, res) => {
 
 // Client side
 const response = await client.send('/api/download', {});
-if (response.fileData) {
+if (response.data instanceof File || response.data instanceof Blob) {
+  const file = response.data instanceof File ? response.data : null;
+  const fileName = file?.name || 'download';
+
   // Create download link
-  const blob = new Blob(
-    [atob(response.fileData.content)], 
-    { type: response.fileData.mimeType }
-  );
-  const url = URL.createObjectURL(blob);
-  
+  const url = URL.createObjectURL(response.data);
+
   // Trigger download
   const a = document.createElement('a');
   a.href = url;
-  a.download = response.fileData.fileName || 'download';
+  a.download = fileName;
   a.click();
+  URL.revokeObjectURL(url);
 }
+```
+
+### File Upload (Client → Server)
+
+Client sends files via stream only. By default `autoResolve: true`, server will resolve the file to `File/Blob` and put it into `req.body` before calling your handler.
+
+```typescript
+// Client side
+const file = new File(['Hello Upload'], 'upload.txt', { type: 'text/plain' });
+await client.send('/api/upload', file); // File/Blob auto-dispatches to sendFile (stream)
+
+// Server side
+server.on('/api/upload', async (req, res) => {
+  const blob = req.body as Blob;
+  const text = await blob.text();
+  res.send({ ok: true, text });
+});
+```
+
+### Route Params (req.params)
+
+Supports Express-style `:param` route parameters. Extracted parameters are available in `req.params`.
+
+```typescript
+server.on('/api/users/:id', (req, res) => {
+  res.send({ userId: req.params.id });
+});
 ```
 
 ### Debug Mode

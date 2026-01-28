@@ -1,7 +1,7 @@
 import { ServerResponse, CookieOptions, SendOptions, SendFileOptions } from '../types';
-import { createPostMessage, createSetCookie, createClearCookie } from '../utils';
+import { createPostMessage, createSetCookie, createClearCookie, detectContentType, blobToBase64 } from '../utils';
 import { MessageType, HttpStatus, HttpHeader, getStatusText, MessageRole } from '../constants';
-import { IframeWritableStream, IframeFileWritableStream } from '../stream';
+import { IframeWritableStream, IframeFileWritableStream, isIframeWritableStream } from '../stream';
 import { MessageChannel } from '../message';
 
 
@@ -22,7 +22,7 @@ export class ServerResponseImpl implements ServerResponse {
   private readonly secretKey?: string;
   private readonly targetWindow: Window;
   private readonly targetOrigin: string;
-  private readonly channel?: MessageChannel;
+  private readonly channel: MessageChannel;
   /** Target client ID (usually the creatorId of the original request) */
   private readonly targetId?: string;
   /** Server instance ID (for creatorId in responses) */
@@ -36,7 +36,7 @@ export class ServerResponseImpl implements ServerResponse {
     secretKey: string | undefined,
     targetWindow: Window,
     targetOrigin: string,
-    channel?: MessageChannel,
+    channel: MessageChannel,
     serverId?: string,
     targetId?: string
   ) {
@@ -51,13 +51,36 @@ export class ServerResponseImpl implements ServerResponse {
   }
 
   /**
-   * Send message via channel or direct postMessage
+   * Send message via channel
    */
   private sendMessage(message: any): void {
-    if (this.channel) {
-      this.channel.send(this.targetWindow, message, this.targetOrigin);
-    } else {
-      this.targetWindow.postMessage(message, this.targetOrigin);
+    this.channel.send(this.targetWindow, message, this.targetOrigin);
+  }
+
+  /**
+   * Check if header exists (case-insensitive)
+   */
+  private hasHeader(name: string): boolean {
+    const lower = name.toLowerCase();
+    return Object.keys(this.headers).some((k) => k.toLowerCase() === lower);
+  }
+
+  /**
+   * Detect data type and return appropriate Content-Type
+   * Returns null if Content-Type should not be auto-set
+   */
+  private detectContentType(data: any): string | null {
+    return detectContentType(data, { checkStream: true, isIframeWritableStream });
+  }
+
+  /**
+   * Auto set Content-Type based on data type (only if user not set)
+   */
+  private ensureContentTypeIfNeeded(data: any): void {
+    if (this.hasHeader(HttpHeader.CONTENT_TYPE)) return;
+    const contentType = this.detectContentType(data);
+    if (contentType) {
+      this.setHeader(HttpHeader.CONTENT_TYPE, contentType);
     }
   }
 
@@ -78,7 +101,10 @@ export class ServerResponseImpl implements ServerResponse {
     }
   }
 
-  public send(data: any, options?: SendOptions): Promise<boolean> {
+  /**
+   * Internal method: send raw data (used by send after type detection)
+   */
+  private _sendRaw(data: any, options?: SendOptions): Promise<boolean> {
     if (this._sent) return Promise.resolve(false);
     this._sent = true;
 
@@ -124,8 +150,46 @@ export class ServerResponseImpl implements ServerResponse {
     });
   }
 
+  /**
+   * Universal send method - automatically detects data type and calls appropriate method
+   * - If data is IframeWritableStream, calls sendStream
+   * - If data is File/Blob, calls sendFile
+   * - Otherwise, sends as regular data with auto-detected Content-Type
+   */
+  public async send(data: any, options?: SendOptions): Promise<boolean> {
+    if (this._sent) return Promise.resolve(false);
+
+    // Check if data is a stream (IframeWritableStream)
+    if (isIframeWritableStream(data)) {
+      // It's a stream, use sendStream
+      await this.sendStream(data);
+      // sendStream doesn't return boolean, but send needs to maintain API
+      // Since sendStream handles requireAck internally, we return true
+      return true;
+    }
+
+    // Check if data is File or Blob
+    if (
+      (typeof File !== 'undefined' && data instanceof File) ||
+      (typeof Blob !== 'undefined' && data instanceof Blob)
+    ) {
+      // Extract options for sendFile
+      const fileOptions: SendFileOptions = {
+        requireAck: options?.requireAck,
+        // If it's a File, use its type and name
+        ...(typeof File !== 'undefined' && data instanceof File
+          ? { mimeType: data.type, fileName: data.name }
+          : {})
+      };
+      return this.sendFile(data, fileOptions);
+    }
+
+    // For other types, auto-detect and set Content-Type, then send
+    this.ensureContentTypeIfNeeded(data);
+    return this._sendRaw(data, options);
+  }
+
   public json(data: any, options?: SendOptions): Promise<boolean> {
-    this.setHeader(HttpHeader.CONTENT_TYPE, 'application/json');
     return this.send(data, options);
   }
 
@@ -146,10 +210,10 @@ export class ServerResponseImpl implements ServerResponse {
     } else if (content instanceof File) {
       mimeType = content.type || mimeType;
       fileName = fileName || content.name;
-      fileContent = await this.blobToBase64(content);
+      fileContent = await blobToBase64(content);
     } else {
       // Blob - convert to base64
-      fileContent = await this.blobToBase64(content);
+      fileContent = await blobToBase64(content);
     }
 
     // Set file-related headers
@@ -295,17 +359,4 @@ export class ServerResponseImpl implements ServerResponse {
     return this;
   }
 
-  private async blobToBase64(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        // Remove data URL prefix (e.g., "data:image/png;base64,")
-        const base64 = result.includes(',') ? result.split(',')[1] : result;
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
 }

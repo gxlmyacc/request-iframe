@@ -85,8 +85,8 @@ export interface StreamBindContext {
   targetOrigin: string;
   /** secretKey */
   secretKey?: string;
-  /** MessageChannel for sending messages (optional, uses direct postMessage if not provided) */
-  channel?: MessageChannel;
+  /** MessageChannel for sending messages */
+  channel: MessageChannel;
   /** Server instance ID (for server-side streams, used as creatorId) */
   serverId?: string;
   /** Client instance ID (for client-side streams, used as creatorId) */

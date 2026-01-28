@@ -30,7 +30,9 @@ export {
   IframeFileWritableStream,
   IframeFileReadableStream,
   isIframeReadableStream,
-  isIframeFileStream
+  isIframeFileReadableStream,
+  isIframeFileWritableStream,
+  isIframeWritableStream
 } from './stream';
 export type {
   StreamType,
@@ -48,6 +50,10 @@ export type {
 } from './stream';
 // Types and utilities
 export * from './types';
+export {
+  detectContentType,
+  blobToBase64
+} from './utils';
 export { InterceptorManager, RequestInterceptorManager, ResponseInterceptorManager } from './interceptors';
 // Constants
 export * from './constants';

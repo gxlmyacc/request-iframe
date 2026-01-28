@@ -58,6 +58,11 @@ export function matchPath(path: string, matcher: PathMatcher): boolean {
       return matchPattern(normalizedPath, normalizedMatcher);
     }
 
+    // Support parameter patterns (e.g., '/api/users/:id')
+    if (matcher.includes(':')) {
+      return matchPathWithParams(normalizedPath, normalizedMatcher).match;
+    }
+
     return false;
   }
 
@@ -78,4 +83,71 @@ function matchPattern(path: string, pattern: string): boolean {
     .replace(/\*/g, '.*'); // Replace * with .*
   const regex = new RegExp(`^${regexPattern}$`);
   return regex.test(path);
+}
+
+/**
+ * Path match result with extracted parameters
+ */
+export interface PathMatchResult {
+  /** Whether the path matches */
+  match: boolean;
+  /** Extracted path parameters (e.g., { id: '123' } for '/api/users/:id' and '/api/users/123') */
+  params: Record<string, string>;
+}
+
+/**
+ * Match path with parameter extraction (supports :param syntax like Express)
+ * @param path request path
+ * @param pattern path pattern with parameters (e.g., '/api/users/:id')
+ * @returns match result with extracted parameters
+ */
+export function matchPathWithParams(path: string, pattern: string): PathMatchResult {
+  // Normalize paths
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const normalizedPattern = pattern.startsWith('/') ? pattern : `/${pattern}`;
+
+  // Check if pattern contains parameters (:param)
+  if (!normalizedPattern.includes(':')) {
+    // No parameters, use exact match
+    return {
+      match: normalizedPath === normalizedPattern,
+      params: {}
+    };
+  }
+
+  // Extract parameter names from pattern
+  const paramNames: string[] = [];
+  const paramRegex = /:([^/]+)/g;
+  let match;
+  while ((match = paramRegex.exec(normalizedPattern)) !== null) {
+    paramNames.push(match[1]);
+  }
+
+  // Convert pattern to regex, replacing :param with capture groups
+  // '/api/users/:id' -> '^/api/users/([^/]+)$'
+  // '/api/users/:id/posts/:postId' -> '^/api/users/([^/]+)/posts/([^/]+)$'
+  const regexPattern = normalizedPattern
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape special characters
+    .replace(/:[^/]+/g, '([^/]+)'); // Replace :param with capture group
+
+  const regex = new RegExp(`^${regexPattern}$`);
+  const regexMatch = regex.exec(normalizedPath);
+
+  if (!regexMatch) {
+    return {
+      match: false,
+      params: {}
+    };
+  }
+
+  // Extract parameter values from match groups
+  const params: Record<string, string> = {};
+  for (let i = 0; i < paramNames.length; i++) {
+    params[paramNames[i]] = regexMatch[i + 1];
+  }
+
+  return {
+    match: true,
+    params
+  };
 }

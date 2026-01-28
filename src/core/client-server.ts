@@ -56,6 +56,11 @@ export class RequestIframeClientServer {
   
   /** Pending requests awaiting response */
   private readonly pendingRequests = new Map<string, PendingRequest>();
+
+  /**
+   * Avoid spamming logs for the same requestId when closed/destroyed
+   */
+  private readonly warnedMissingPendingWhenClosed = new Set<string>();
   
   /** Stream message callback */
   private streamCallback?: StreamMessageCallback;
@@ -117,11 +122,14 @@ export class RequestIframeClientServer {
       onVersionError: this.handleVersionError.bind(this)
     };
 
+    // Bind handleClientResponse to ensure correct 'this' context
+    const boundHandleClientResponse = this.handleClientResponse.bind(this);
+
     // Handle ACK messages
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.ACK,
-        (data, context) => this.handleClientResponse(data, context),
+        boundHandleClientResponse,
         handlerOptions
       )
     );
@@ -130,7 +138,7 @@ export class RequestIframeClientServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.ASYNC,
-        (data, context) => this.handleClientResponse(data, context),
+        boundHandleClientResponse,
         handlerOptions
       )
     );
@@ -139,7 +147,7 @@ export class RequestIframeClientServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.RESPONSE,
-        (data, context) => this.handleClientResponse(data, context),
+        boundHandleClientResponse,
         handlerOptions
       )
     );
@@ -148,7 +156,7 @@ export class RequestIframeClientServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.ERROR,
-        (data, context) => this.handleClientResponse(data, context),
+        boundHandleClientResponse,
         handlerOptions
       )
     );
@@ -157,7 +165,7 @@ export class RequestIframeClientServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.RECEIVED,
-        (data) => this.handleReceived(data),
+        this.handleReceived.bind(this),
         handlerOptions
       )
     );
@@ -166,7 +174,7 @@ export class RequestIframeClientServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.PONG,
-        (data, context) => this.handlePong(data, context),
+        this.handlePong.bind(this),
         handlerOptions
       )
     );
@@ -176,11 +184,7 @@ export class RequestIframeClientServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.STREAM_START,
-        (data, context) => {
-          // Route to handleClientResponse so it reaches send callback
-          this.handleClientResponse(data, context);
-          // Don't call streamCallback here - stream_start is handled in send callback
-        },
+        boundHandleClientResponse,
         handlerOptions
       )
     );
@@ -214,20 +218,38 @@ export class RequestIframeClientServer {
    */
   private handleClientResponse(data: PostMessageData, context: MessageContext): void {
     const pending = this.pendingRequests.get(data.requestId);
-    if (pending) {
-      // Validate origin
-      if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
-        return;
+    if (!pending) {
+      /**
+       * Pending request not found - ignore by default.
+       *
+       * If client server is already closed/destroyed, emit a warning to help debugging:
+       * this usually means the client was recreated/unmounted before the response arrived.
+       */
+      if (!this._isOpen) {
+        const key = data.requestId;
+        if (!this.warnedMissingPendingWhenClosed.has(key)) {
+          this.warnedMissingPendingWhenClosed.add(key);
+          // eslint-disable-next-line no-console
+          console.warn(formatMessage(Messages.CLIENT_SERVER_IGNORED_MESSAGE_WHEN_CLOSED, data.type, data.requestId));
+        }
       }
-      // ack, async, and stream_start don't delete pending (stream_start needs to keep pending for stream_data/stream_end)
-      if (data.type === MessageType.ACK || data.type === MessageType.ASYNC || data.type === MessageType.STREAM_START) {
-        pending.resolve(data);
-        return;
-      }
-      // response and error delete pending
-      this.pendingRequests.delete(data.requestId);
-      pending.resolve(data);
+      return;
     }
+    
+    // Validate origin
+    if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
+      return;
+    }
+    
+    // ack, async, and stream_start don't delete pending (stream_start needs to keep pending for stream_data/stream_end)
+    if (data.type === MessageType.ACK || data.type === MessageType.ASYNC || data.type === MessageType.STREAM_START) {
+      pending.resolve(data);
+      return;
+    }
+    
+    // response and error delete pending
+    this.pendingRequests.delete(data.requestId);
+    pending.resolve(data);
   }
 
   /**
@@ -326,6 +348,7 @@ export class RequestIframeClientServer {
     this.pendingRequests.clear();
     this.pendingAcks.forEach((pending) => clearTimeout(pending.timeoutId));
     this.pendingAcks.clear();
+    this.warnedMissingPendingWhenClosed.clear();
     
     // Destroy dispatcher and release channel reference
     this.dispatcher.destroy();

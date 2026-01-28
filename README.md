@@ -74,7 +74,7 @@ In micro-frontend and iframe nesting scenarios, parent-child page communication 
 - ⏱️ **Smart Timeout** - Three-stage timeout (connection/sync/async), automatically detects long tasks
 - 📦 **TypeScript** - Complete type definitions and IntelliSense
 - 🔒 **Message Isolation** - secretKey mechanism prevents message cross-talk between multiple instances
-- 📁 **File Transfer** - Support for base64-encoded file sending
+- 📁 **File Transfer** - Support for file sending via stream (client→server)
 - 🌊 **Streaming** - Support for large file chunked transfer, supports async iterators
 - 🌍 **Internationalization** - Error messages can be customized for i18n
 - ✅ **Protocol Versioning** - Built-in version control for upgrade compatibility
@@ -544,6 +544,8 @@ server.on('/api/data', (req, res) => {
 
 ### File Transfer
 
+#### Server → Client (Server sends file to client)
+
 ```typescript
 // Server side: Send file
 server.on('/api/download', async (req, res) => {
@@ -574,16 +576,46 @@ if (response.data instanceof File || response.data instanceof Blob) {
 }
 ```
 
+#### Client → Server (Client sends file to server)
+
+Client sends file via stream only. Use `sendFile()` (or `send(path, file)`); server receives either `req.body` as File/Blob when `autoResolve: true` (default), or `req.stream` as `IframeFileReadableStream` when `autoResolve: false`.
+
+```typescript
+// Client side: Send file (stream, autoResolve defaults to true)
+const file = new File(['Hello Upload'], 'upload.txt', { type: 'text/plain' });
+const response = await client.send('/api/upload', file);
+
+// Or use sendFile explicitly
+const blob = new Blob(['binary data'], { type: 'application/octet-stream' });
+const response2 = await client.sendFile('/api/upload', blob, {
+  fileName: 'data.bin',
+  mimeType: 'application/octet-stream',
+  autoResolve: true  // optional, default true: server gets File/Blob in req.body
+});
+
+// Server side: Receive file (autoResolve true → req.body is File/Blob)
+server.on('/api/upload', async (req, res) => {
+  const blob = req.body as Blob;  // or File when client sent File
+  const text = await blob.text();
+  console.log('Received file content:', text);
+  res.send({ success: true, size: blob.size });
+});
+```
+
+**Note:** When using `client.send()` with a `File` or `Blob`, it automatically dispatches to `client.sendFile()`, which sends the file via stream. Server gets `req.body` as File/Blob when `autoResolve` is true (default), or `req.stream` / `req.body` as `IframeFileReadableStream` when `autoResolve` is false.
+
 ### Streaming
 
 For large files or scenarios requiring chunked transfer, you can use streaming:
+
+#### Server → Client (Server sends stream to client)
 
 ```typescript
 import { 
   IframeWritableStream, 
   IframeFileWritableStream,
   isIframeReadableStream,
-  isIframeFileStream 
+  isIframeFileReadableStream 
 } from 'request-iframe';
 
 // Server side: Send data stream using iterator
@@ -629,6 +661,55 @@ if (isIframeReadableStream(response.stream)) {
   // Cancel stream
   response.stream.cancel('User cancelled');
 }
+```
+
+#### Client → Server (Client sends stream to server)
+
+```typescript
+import { IframeWritableStream } from 'request-iframe';
+
+// Client side: Send stream to server
+const stream = new IframeWritableStream({
+  chunked: true,
+  iterator: async function* () {
+    for (let i = 0; i < 5; i++) {
+      yield `Chunk ${i}`;
+      await new Promise(r => setTimeout(r, 50));
+    }
+  }
+});
+
+// Use sendStream to send stream as request body
+const response = await client.sendStream('/api/uploadStream', stream);
+console.log('Upload result:', response.data);
+
+// Or use send() - it automatically dispatches to sendStream for IframeWritableStream
+const stream2 = new IframeWritableStream({
+  next: async () => ({ data: 'single chunk', done: true })
+});
+const response2 = await client.send('/api/uploadStream', stream2);
+
+// Server side: Receive stream
+server.on('/api/uploadStream', async (req, res) => {
+  // req.stream is available when client sends stream
+  if (req.stream) {
+    const chunks: string[] = [];
+    
+    // Read stream chunk by chunk
+    for await (const chunk of req.stream) {
+      chunks.push(chunk);
+      console.log('Received chunk:', chunk);
+    }
+    
+    res.send({ 
+      success: true, 
+      chunkCount: chunks.length,
+      chunks 
+    });
+  } else {
+    res.status(400).send({ error: 'Expected stream body' });
+  }
+});
 ```
 
 **Stream Types:**
@@ -745,14 +826,14 @@ Create a Server instance.
 
 #### client.send(path, body?, options?)
 
-Send a request.
+Send a request. Automatically dispatches to `sendFile()` or `sendStream()` based on body type.
 
 **Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | `string` | Request path |
-| `body` | `object` | Request data (optional) |
+| `body` | `any` | Request data (optional). Can be plain object, File, Blob, or IframeWritableStream. Automatically dispatches: File/Blob → `sendFile()`, IframeWritableStream → `sendStream()` |
 | `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
@@ -772,6 +853,69 @@ interface Response<T = any> {
   stream?: IIframeReadableStream<T>;  // Stream response (if any)
 }
 ```
+
+**Examples:**
+
+```typescript
+// Send plain object (auto Content-Type: application/json)
+await client.send('/api/data', { name: 'test' });
+
+// Send string (auto Content-Type: text/plain)
+await client.send('/api/text', 'Hello');
+
+// Send File/Blob (auto-dispatches to sendFile)
+const file = new File(['content'], 'test.txt');
+await client.send('/api/upload', file);
+
+// Send stream (auto-dispatches to sendStream)
+const stream = new IframeWritableStream({ iterator: async function* () { yield 'data'; } });
+await client.send('/api/uploadStream', stream);
+```
+
+#### client.sendFile(path, content, options?)
+
+Send file as request body (via stream; server receives File/Blob when autoResolve is true).
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | `string` | Request path |
+| `content` | `string \| Blob \| File` | File content to send |
+| `options.mimeType` | `string` | File MIME type (optional, uses content.type if available) |
+| `options.fileName` | `string` | File name (optional) |
+| `options.autoResolve` | `boolean` | If true (default), server receives File/Blob in `req.body`; if false, server gets `req.stream` / `req.body` as `IframeFileReadableStream` |
+| `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
+| `options.timeout` | `number` | Request timeout (ms), default 5000 |
+| `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
+| `options.headers` | `object` | Request headers (optional) |
+| `options.cookies` | `object` | Request cookies (optional) |
+| `options.requestId` | `string` | Custom request ID (optional) |
+
+**Returns:** `Promise<Response>`
+
+**Note:** The file is sent via stream. When `autoResolve` is true (default), the server receives `req.body` as File/Blob; when false, the server receives `req.stream` / `req.body` as `IframeFileReadableStream`.
+
+#### client.sendStream(path, stream, options?)
+
+Send stream as request body (server receives readable stream).
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | `string` | Request path |
+| `stream` | `IframeWritableStream` | Writable stream to send |
+| `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
+| `options.timeout` | `number` | Request timeout (ms), default 5000 |
+| `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
+| `options.headers` | `object` | Request headers (optional) |
+| `options.cookies` | `object` | Request cookies (optional) |
+| `options.requestId` | `string` | Custom request ID (optional) |
+
+**Returns:** `Promise<Response>`
+
+**Note:** On the server side, the stream is available as `req.stream` (an `IIframeReadableStream`). You can iterate over it using `for await (const chunk of req.stream)`.
 
 #### client.isConnect()
 
@@ -806,6 +950,71 @@ Register route handler.
 
 ```typescript
 type ServerHandler = (req: ServerRequest, res: ServerResponse) => any | Promise<any>;
+```
+
+**ServerRequest interface:**
+
+```typescript
+interface ServerRequest {
+  body: any;                    // Request body (plain data, or File/Blob when client sendFile with autoResolve true)
+  stream?: IIframeReadableStream; // Request stream (when client sends via sendStream or sendFile with autoResolve false)
+  headers: Record<string, string>; // Request headers
+  cookies: Record<string, string>;  // Request cookies
+  path: string;                 // Request path
+  params: Record<string, string>; // Path parameters extracted from route pattern (e.g., { id: '123' } for '/api/users/:id' and '/api/users/123')
+  requestId: string;            // Request ID
+  origin: string;               // Sender origin
+  source: Window;                // Sender window
+  res: ServerResponse;          // Response object
+}
+```
+
+**Note:** 
+- When client sends a file via `sendFile()` (or `send(path, file)`), the file is sent via stream. If `autoResolve` is true (default), `req.body` is the resolved File/Blob; if false, `req.stream` / `req.body` is an `IIframeReadableStream` (e.g. `IframeFileReadableStream`).
+- When client sends a stream via `sendStream()`, `req.stream` is available as an `IIframeReadableStream`. You can iterate over it using `for await (const chunk of req.stream)`.
+- **Path parameters**: You can use Express-style route parameters (e.g., `/api/users/:id`) to extract path segments. The extracted parameters are available in `req.params`. For example, registering `/api/users/:id` and receiving `/api/users/123` will set `req.params.id` to `'123'`.
+
+**Path Parameters Example:**
+
+```typescript
+// Register route with parameter
+server.on('/api/users/:id', (req, res) => {
+  const userId = req.params.id; // '123' when path is '/api/users/123'
+  res.send({ userId });
+});
+
+// Multiple parameters
+server.on('/api/users/:userId/posts/:postId', (req, res) => {
+  const { userId, postId } = req.params;
+  res.send({ userId, postId });
+});
+```
+
+**Handler return value behavior**
+
+- If your handler **does not call** `res.send()` / `res.json()` / `res.sendFile()` / `res.sendStream()`, but it **returns a value that is not `undefined`**, then the server will treat it as a successful result and automatically send it back to the client (equivalent to `res.send(returnValue)`).
+- For **async handlers** (`Promise`): if the promise **resolves to a value that is not `undefined`** and no response has been sent yet, it will also be auto-sent.
+- If the handler (or resolved promise) returns `undefined` **and** no response method was called, the server will respond with error code `NO_RESPONSE`.
+
+Examples:
+
+```typescript
+// Sync: auto-send return value
+server.on('/api/hello', () => {
+  return { message: 'hello' };
+});
+
+// Async: auto-send resolved value
+server.on('/api/user', async (req) => {
+  const user = await getUser(req.body.userId);
+  return user; // auto-send if not undefined
+});
+
+// If you manually send, return value is ignored
+server.on('/api/manual', (req, res) => {
+  res.send({ ok: true });
+  return { ignored: true };
+});
 ```
 
 #### server.off(path)

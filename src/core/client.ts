@@ -9,6 +9,7 @@ import {
   HeadersConfig,
   HeaderValue
 } from '../types';
+import { detectContentType, blobToBase64 } from '../utils';
 import {
   generateRequestId,
   generateInstanceId,
@@ -35,6 +36,8 @@ import {
 import {
   IframeReadableStream,
   IframeFileReadableStream,
+  IframeWritableStream,
+  isIframeWritableStream,
   StreamMessageHandler,
   StreamMessageData
 } from '../stream';
@@ -59,7 +62,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     response: new ResponseInterceptorManager()
   };
 
-  private readonly targetWindow: Window;
+  public readonly targetWindow: Window;
   private readonly targetOrigin: string;
   private readonly server: RequestIframeClientServer;
   private readonly secretKey?: string;
@@ -68,6 +71,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
   private readonly defaultAckTimeout: number;
   private readonly defaultTimeout: number;
   private readonly defaultAsyncTimeout: number;
+  
+  /** Default returnData configuration */
+  private readonly defaultReturnData: boolean;
   
   /** Initial headers configuration */
   private readonly initialHeaders?: HeadersConfig;
@@ -109,6 +115,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this.defaultAckTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.defaultTimeout = options?.timeout ?? DefaultTimeout.REQUEST;
     this.defaultAsyncTimeout = options?.asyncTimeout ?? DefaultTimeout.ASYNC;
+    
+    // Set default returnData configuration
+    this.defaultReturnData = options?.returnData ?? false;
     
     // Save initial headers configuration
     this.initialHeaders = options?.headers;
@@ -166,10 +175,26 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
   }
 
   /**
+   * Detect Content-Type for request body
+   */
+  private detectContentTypeForBody(body: any): string | null {
+    return detectContentType(body, { checkStream: false });
+  }
+
+  /**
+   * Check if header exists (case-insensitive)
+   */
+  private hasHeader(headers: Record<string, string | string[]>, name: string): boolean {
+    const lower = name.toLowerCase();
+    return Object.keys(headers).some((k) => k.toLowerCase() === lower);
+  }
+
+  /**
    * Merge and resolve headers (initial headers + request headers)
    * Request headers take precedence over initial headers
+   * Also auto-detects and sets Content-Type if not already set
    */
-  private mergeHeaders(config: RequestConfig): Record<string, string | string[]> {
+  private mergeHeaders(config: RequestConfig, body?: any): Record<string, string | string[]> {
     const resolvedHeaders: Record<string, string | string[]> = {};
 
     // First, resolve initial headers
@@ -183,6 +208,14 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     if (config.headers) {
       for (const [key, value] of Object.entries(config.headers)) {
         resolvedHeaders[key] = this.resolveHeaderValue(value, config);
+      }
+    }
+
+    // Auto-detect and set Content-Type if not already set and body is provided
+    if (body !== undefined && !this.hasHeader(resolvedHeaders, HttpHeader.CONTENT_TYPE)) {
+      const contentType = this.detectContentTypeForBody(body);
+      if (contentType) {
+        resolvedHeaders[HttpHeader.CONTENT_TYPE] = contentType;
       }
     }
 
@@ -241,9 +274,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
   public async send<T = any>(
     path: string,
-    body?: Record<string, any>,
+    body?: any,
     options?: RequestOptions
-  ): Promise<Response<T>> {
+  ): Promise<Response<T> | T> {
     const config: RequestConfig = {
       path,
       body,
@@ -255,25 +288,146 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       config
     );
 
+    const processedBody = processedConfig.body;
+
+    // Universal send: dispatch by type (like response.send)
+    if (
+      (typeof File !== 'undefined' && processedBody instanceof File) ||
+      (typeof Blob !== 'undefined' && processedBody instanceof Blob)
+    ) {
+      return this.sendFile(path, processedBody, options);
+    }
+    if (isIframeWritableStream(processedBody)) {
+      return this.sendStream(path, processedBody, options);
+    }
+
     // Merge and resolve headers (initial headers + request headers)
-    const mergedHeaders = this.mergeHeaders(processedConfig);
+    const mergedHeaders = this.mergeHeaders(processedConfig, processedBody);
 
     const {
       path: processedPath,
-      body: processedBody,
       cookies: processedCookies,
       targetId: userTargetId,
-      ackTimeout = this.defaultAckTimeout,
-      timeout = this.defaultTimeout,
-      asyncTimeout = this.defaultAsyncTimeout,
       requestId = generateRequestId(),
     } = processedConfig;
 
-    // Use user-specified targetId, or remembered target server ID, or undefined
     const targetId = userTargetId || this._targetServerId;
 
-    return new Promise<Response<T>>((resolve, reject) => {
-      const prefixedPath = this.prefixPath(processedPath);
+    return this._sendRequest<T>(
+      processedPath,
+      processedBody,
+      mergedHeaders,
+      processedCookies,
+      processedConfig,
+      requestId,
+      targetId
+    );
+  }
+
+  /**
+   * Send file as request body (stream only; server receives stream or auto-resolved File/Blob via autoResolve).
+   */
+  public async sendFile<T = any>(
+    path: string,
+    content: string | Blob | File,
+    options?: RequestOptions & { mimeType?: string; fileName?: string; autoResolve?: boolean }
+  ): Promise<Response<T> | T> {
+    const streamAutoResolve = options?.autoResolve ?? true;
+    const mimeType = options?.mimeType;
+    const fileName = options?.fileName;
+
+    const { IframeFileWritableStream } = await import('../stream');
+    const fileStream = new IframeFileWritableStream({
+      filename: fileName || (typeof File !== 'undefined' && content instanceof File ? content.name : 'file'),
+      mimeType: mimeType || (typeof File !== 'undefined' && content instanceof File ? content.type : (content as any)?.type) || 'application/octet-stream',
+      chunked: false,
+      autoResolve: streamAutoResolve,
+      next: async () => {
+        const data =
+          typeof content === 'string'
+            ? btoa(unescape(encodeURIComponent(content)))
+            : await blobToBase64(content as Blob);
+        return { data, done: true };
+      }
+    });
+
+    return this.sendStream<T>(path, fileStream as any, options);
+  }
+
+  /**
+   * Send stream as request body (server receives readable stream).
+   * Sends REQUEST with streamId and stream: true, then starts the writable stream.
+   */
+  public async sendStream<T = any>(
+    path: string,
+    stream: IframeWritableStream,
+    options?: RequestOptions
+  ): Promise<Response<T> | T> {
+    const config: RequestConfig = {
+      path,
+      body: undefined,
+      ...options
+    };
+    const processedConfig = await runRequestInterceptors(
+      this.interceptors.request,
+      config
+    );
+    const requestId = processedConfig.requestId ?? generateRequestId();
+    const targetId = processedConfig.targetId ?? this._targetServerId;
+    const processedPath = processedConfig.path;
+
+    stream._bind({
+      requestId,
+      targetWindow: this.targetWindow,
+      targetOrigin: this.targetOrigin,
+      secretKey: this.secretKey,
+      channel: this.server.messageDispatcher.getChannel(),
+      clientId: this.id,
+      targetId
+    });
+
+    const mergedHeaders = this.mergeHeaders(processedConfig, undefined);
+    const pathMatchedCookies = this._cookieStore.getForPath(processedPath);
+    const mergedCookies = { ...pathMatchedCookies, ...processedConfig.cookies };
+
+    const streamConfig = { ...processedConfig, requestId };
+    const promise = this._sendRequest<T>(
+      processedPath,
+      undefined,
+      mergedHeaders,
+      mergedCookies,
+      streamConfig,
+      requestId,
+      targetId,
+      { streamId: stream.streamId }
+    );
+
+    /** Start stream after REQUEST is sent (_sendRequest sends synchronously in executor) */
+    void stream.start();
+    return promise;
+  }
+
+  /**
+   * Internal: send REQUEST and wait for response (used by send, sendFile, sendStream).
+   */
+  private _sendRequest<T = any>(
+    requestPath: string,
+    body: any,
+    mergedHeaders: Record<string, string | string[]>,
+    processedCookies: Record<string, string> | undefined,
+    processedConfig: RequestConfig,
+    requestId: string,
+    targetId: string | undefined,
+    extraPayload?: { streamId?: string }
+  ): Promise<Response<T> | T> {
+    const {
+      ackTimeout = this.defaultAckTimeout,
+      timeout = this.defaultTimeout,
+      asyncTimeout = this.defaultAsyncTimeout,
+      returnData = this.defaultReturnData
+    } = processedConfig;
+
+    return new Promise<Response<T> | T>((resolve, reject) => {
       let done = false;
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -430,7 +584,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                     
                     return runResponseInterceptors(this.interceptors.response, resp);
                   })
-                  .then(resolve)
+                  .then((response) => {
+                    resolve(returnData ? response.data : response);
+                  })
                   .catch(reject);
                 return;
               }
@@ -446,7 +602,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               };
               
               runResponseInterceptors(this.interceptors.response, resp)
-                .then(resolve)
+                .then((response) => {
+                  resolve(returnData ? response.data : response);
+                })
                 .catch(reject);
               return;
             }
@@ -473,7 +631,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
             };
             
             runResponseInterceptors(this.interceptors.response, resp)
-              .then(resolve)
+              .then((response) => {
+                resolve(returnData ? response.data : response);
+              })
               .catch(reject);
             return;
           }
@@ -502,7 +662,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                 MessageType.RECEIVED,
                 requestId,
                 { 
-                  path: prefixedPath,
+                  path: requestPath,
                   targetId: data.creatorId
                 }
               );
@@ -525,7 +685,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               headers: data.headers
             };
             runResponseInterceptors(this.interceptors.response, resp)
-              .then(resolve)
+              .then((response) => {
+                resolve(returnData ? response.data : response);
+              })
               .catch(reject);
             return;
           }
@@ -545,7 +707,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                 MessageType.RECEIVED,
                 requestId,
                 { 
-                  path: prefixedPath,
+                  path: requestPath,
                   targetId: data.creatorId
                 }
               );
@@ -582,30 +744,29 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       setAckTimeout();
 
       // Get cookies matching request path and merge with user-provided cookies (user-provided takes precedence)
-      const pathMatchedCookies = this._cookieStore.getForPath(processedPath);
+      const pathMatchedCookies = this._cookieStore.getForPath(requestPath);
       const mergedCookies = { ...pathMatchedCookies, ...processedCookies };
 
       // Send request via MessageDispatcher
+      const payload: Record<string, any> = {
+        path: requestPath,
+        body,
+        headers: mergedHeaders,
+        cookies: mergedCookies,
+        targetId
+      };
+      if (extraPayload?.streamId) {
+        payload.streamId = extraPayload.streamId;
+      }
       this.server.messageDispatcher.sendMessage(
         this.targetWindow,
         this.targetOrigin,
         MessageType.REQUEST,
         requestId,
-        {
-          path: prefixedPath,
-          body: processedBody,
-          headers: mergedHeaders,
-          cookies: mergedCookies,
-          targetId
-        }
+        payload
       );
     });
   }
-
-  private prefixPath(path: string): string {
-    return this.secretKey ? `${this.secretKey}:${path}` : path;
-  }
-
   /**
    * Get internal server instance (for debugging)
    */

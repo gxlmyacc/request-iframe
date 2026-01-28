@@ -74,7 +74,7 @@
 - ⏱️ **智能超时** - 三阶段超时（连接/同步/异步），自动识别长任务
 - 📦 **TypeScript** - 完整的类型定义和智能提示
 - 🔒 **消息隔离** - secretKey 机制避免多实例消息串线
-- 📁 **文件传输** - 支持 base64 编码的文件发送
+- 📁 **文件传输** - 支持文件通过流方式传输（Client→Server）
 - 🌊 **流式传输** - 支持大文件分块传输，支持异步迭代器
 - 🌍 **多语言** - 错误消息可自定义，便于国际化
 - ✅ **协议版本** - 内置版本控制，便于升级兼容
@@ -601,6 +601,34 @@ if (response.data instanceof File || response.data instanceof Blob) {
 }
 ```
 
+#### Client → Server（Client 向 Server 发送文件）
+
+Client 端发送文件**仅走流式**。使用 `sendFile()`（或直接 `send(path, file)`）；Server 端在 `autoResolve: true`（默认）时会把文件自动解析成 `File/Blob` 放到 `req.body`，当 `autoResolve: false` 时则通过 `req.stream` / `req.body` 暴露为 `IframeFileReadableStream`。
+
+```typescript
+// Client 端：发送文件（stream，autoResolve 默认 true）
+const file = new File(['Hello Upload'], 'upload.txt', { type: 'text/plain' });
+const response = await client.send('/api/upload', file);
+
+// 或显式使用 sendFile
+const blob = new Blob(['binary data'], { type: 'application/octet-stream' });
+const response2 = await client.sendFile('/api/upload', blob, {
+  fileName: 'data.bin',
+  mimeType: 'application/octet-stream',
+  autoResolve: true // 可选，默认 true：Server 在 req.body 里拿到 File/Blob
+});
+
+// Server 端：接收文件（autoResolve true → req.body 是 File/Blob）
+server.on('/api/upload', async (req, res) => {
+  const blob = req.body as Blob; // 如果 client 发送的是 File，这里也可能是 File
+  const text = await blob.text();
+  console.log('Received file content:', text);
+  res.send({ success: true, size: blob.size });
+});
+```
+
+**提示**：当 `client.send()` 的 `body` 是 `File/Blob` 时，会自动分发到 `client.sendFile()`（走流式）。`autoResolve` 为 true（默认）时 Server 拿到 `req.body`（File/Blob），为 false 时拿到 `req.stream` / `req.body`（`IframeFileReadableStream`）。
+
 ### 流式传输（Stream）
 
 对于大文件或需要分块传输的场景，可以使用流式传输：
@@ -610,7 +638,7 @@ import {
   IframeWritableStream, 
   IframeFileWritableStream,
   isIframeReadableStream,
-  isIframeFileStream 
+  isIframeFileReadableStream 
 } from 'request-iframe';
 
 // Server 端：使用迭代器发送数据流
@@ -694,7 +722,7 @@ if (isIframeReadableStream(response.stream)) {
 // Client 端：接收文件流
 const fileResponse = await client.send('/api/fileStream', {});
 
-if (isIframeFileStream(fileResponse.stream)) {
+if (isIframeFileReadableStream(fileResponse.stream)) {
   // 读取为 Blob
   const blob = await fileResponse.stream.readAsBlob();
   
@@ -716,9 +744,9 @@ if (isIframeFileStream(fileResponse.stream)) {
 | 类型 | 说明 |
 |------|------|
 | `IframeWritableStream` | 服务端可写流，用于发送普通数据 |
-| `IframeFileWritableStream` | 服务端文件可写流，自动处理 base64 编码 |
+| `IframeFileWritableStream` | 服务端文件可写流（文件流） |
 | `IframeReadableStream` | 客户端可读流，用于接收普通数据 |
-| `IframeFileReadableStream` | 客户端文件可读流，自动处理 base64 解码 |
+| `IframeFileReadableStream` | 客户端文件可读流（文件流） |
 
 **流选项：**
 
@@ -854,14 +882,16 @@ await client.send('/api/longTask', {}, {
 
 #### client.send(path, body?, options?)
 
-发送请求。
+发送请求。会根据 body 类型自动分发到 `sendFile()` 或 `sendStream()`：
+- `File/Blob` → `sendFile()`
+- `IframeWritableStream` → `sendStream()`
 
 **参数：**
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `path` | `string` | 请求路径 |
-| `body` | `object` | 请求数据（可选） |
+| `body` | `any` | 请求数据（可选）。可以是普通对象、File、Blob、或 IframeWritableStream；会自动分发：File/Blob → `sendFile()`，IframeWritableStream → `sendStream()` |
 | `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
@@ -881,6 +911,69 @@ interface Response<T = any> {
   stream?: IIframeReadableStream<T>;  // 流响应（如果有）
 }
 ```
+
+**示例：**
+
+```typescript
+// 发送普通对象（自动 Content-Type: application/json）
+await client.send('/api/data', { name: 'test' });
+
+// 发送字符串（自动 Content-Type: text/plain）
+await client.send('/api/text', 'Hello');
+
+// 发送 File/Blob（自动分发到 sendFile）
+const file = new File(['content'], 'test.txt');
+await client.send('/api/upload', file);
+
+// 发送流（自动分发到 sendStream）
+const stream = new IframeWritableStream({ iterator: async function* () { yield 'data'; } });
+await client.send('/api/uploadStream', stream);
+```
+
+#### client.sendFile(path, content, options?)
+
+发送文件作为请求体（通过流传输；当 `autoResolve` 为 true 时，Server 在 `req.body` 中拿到 File/Blob）。
+
+**参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `path` | `string` | 请求路径 |
+| `content` | `string \| Blob \| File` | 文件内容 |
+| `options.mimeType` | `string` | MIME 类型（可选，优先使用 content.type） |
+| `options.fileName` | `string` | 文件名（可选） |
+| `options.autoResolve` | `boolean` | 为 true（默认）时 Server 在 `req.body` 中拿到 File/Blob；为 false 时 Server 在 `req.stream` / `req.body` 中拿到 `IframeFileReadableStream` |
+| `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
+| `options.timeout` | `number` | 请求超时（ms），默认 5000 |
+| `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
+| `options.headers` | `object` | 请求 headers（可选） |
+| `options.cookies` | `object` | 请求 cookies（可选） |
+| `options.requestId` | `string` | 自定义请求 ID（可选） |
+
+**返回值：** `Promise<Response>`
+
+**说明：** 文件通过流发送。`autoResolve` 为 true（默认）时 Server 收到 `req.body`（File/Blob）；为 false 时 Server 收到 `req.stream` / `req.body`（`IframeFileReadableStream`）。
+
+#### client.sendStream(path, stream, options?)
+
+发送流作为请求体（Server 端收到可读流）。
+
+**参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `path` | `string` | 请求路径 |
+| `stream` | `IframeWritableStream` | 要发送的可写流 |
+| `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
+| `options.timeout` | `number` | 请求超时（ms），默认 5000 |
+| `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
+| `options.headers` | `object` | 请求 headers（可选） |
+| `options.cookies` | `object` | 请求 cookies（可选） |
+| `options.requestId` | `string` | 自定义请求 ID（可选） |
+
+**返回值：** `Promise<Response>`
+
+**说明：** Server 端的流在 `req.stream`（`IIframeReadableStream`）中，可用 `for await (const chunk of req.stream)` 迭代读取。
 
 #### client.isConnect()
 
@@ -952,6 +1045,39 @@ client.interceptors.response.use(onFulfilled, onRejected?);
 
 ```typescript
 type ServerHandler = (req: ServerRequest, res: ServerResponse) => any | Promise<any>;
+```
+
+**ServerRequest 接口：**
+
+```typescript
+interface ServerRequest {
+  body: any;                          // 请求 body（普通数据；或 autoResolve=true 时的 File/Blob）
+  stream?: IIframeReadableStream;     // 请求流（sendStream；或 sendFile 且 autoResolve=false）
+  headers: Record<string, string>;    // 请求 headers
+  cookies: Record<string, string>;    // 请求 cookies
+  path: string;                       // 请求路径（实际请求路径）
+  params: Record<string, string>;     // 路由参数（由 server.on 注册的路径模式解析得出，如 /api/users/:id）
+  requestId: string;                  // 请求 ID
+  origin: string;                     // 来源 origin
+  source: Window;                     // 来源 window
+  res: ServerResponse;                // 关联的 Response 对象
+}
+```
+
+**说明：**
+- Client 通过 `sendFile()`（或 `send(path, file)`）发送文件时：文件通过流传输；`autoResolve` 为 true（默认）时 Server 在 `req.body` 中拿到 File/Blob；为 false 时在 `req.stream` / `req.body` 中拿到 `IframeFileReadableStream`。
+- Client 通过 `sendStream()` 发送流时：Server 在 `req.stream` 中拿到 `IIframeReadableStream`，可用 `for await` 迭代读取。
+- **路径参数（类似 Express）**：支持 `/api/users/:id` 形式的路由参数，解析结果在 `req.params` 中。
+
+```typescript
+server.on('/api/users/:id', (req, res) => {
+  res.send({ userId: req.params.id });
+});
+
+server.on('/api/users/:userId/posts/:postId', (req, res) => {
+  const { userId, postId } = req.params;
+  res.send({ userId, postId });
+});
 ```
 
 #### server.off(path)
@@ -1247,15 +1373,33 @@ const IframeComponent = () => {
 
 ```typescript
 interface ServerRequest {
-  body: any;                          // 请求 body
+  body: any;                          // 请求 body（普通数据；或 autoResolve=true 时的 File/Blob）
+  stream?: IIframeReadableStream;     // 请求流（sendStream；或 sendFile 且 autoResolve=false）
   headers: Record<string, string>;    // 请求 headers
   cookies: Record<string, string>;    // 请求 cookies
-  path: string;                       // 请求路径
+  path: string;                       // 请求路径（实际请求路径）
+  params: Record<string, string>;     // 路由参数（由 server.on 注册的路径模式解析得出，如 /api/users/:id）
   requestId: string;                  // 请求 ID
   origin: string;                     // 来源 origin
   source: Window;                     // 来源 window
   res: ServerResponse;                // 关联的 Response 对象
 }
+```
+
+**路径参数（类似 Express）**：
+
+支持使用 `:param` 形式声明路由参数，解析结果在 `req.params` 中。
+
+```typescript
+server.on('/api/users/:id', (req, res) => {
+  // 请求 /api/users/123 时：req.params.id === '123'
+  res.send({ userId: req.params.id });
+});
+
+server.on('/api/users/:userId/posts/:postId', (req, res) => {
+  const { userId, postId } = req.params;
+  res.send({ userId, postId });
+});
 ```
 
 ### ServerResponse 对象

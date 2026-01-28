@@ -281,12 +281,13 @@ export class MessageDispatcher {
     requestId: string,
     data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role' | 'creatorId'>>
   ): void {
-    // Automatically set role and creatorId based on dispatcher's role and instanceId
-    // Create message with role and creatorId using createPostMessage directly
+    // Automatically set role, creatorId, and secretKey based on dispatcher's properties
+    // Create message with role, creatorId, and secretKey using createPostMessage directly
     const message = createPostMessage(type, requestId, {
       ...data,
       role: this.role,
-      creatorId: this.instanceId
+      creatorId: this.instanceId,
+      secretKey: this.secretKey
     } as any);
     this.channel.send(target, message, targetOrigin);
   }

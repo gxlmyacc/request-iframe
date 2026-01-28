@@ -8,9 +8,11 @@ import { MessageContext } from '../message';
  */
 export class ServerRequestImpl implements ServerRequest {
   public body: any;
+  public stream?: ServerRequest['stream'];
   public headers: Record<string, string>;
   public cookies: Record<string, string>;
   public path: string;
+  public params: Record<string, string>;
   public requestId: string;
   public origin: string;
   public source: Window;
@@ -19,7 +21,8 @@ export class ServerRequestImpl implements ServerRequest {
   constructor(
     data: PostMessageData,
     context: MessageContext,
-    response: ServerResponse
+    response: ServerResponse,
+    params: Record<string, string> = {}
   ) {
     this.body = data.body;
     // headers may contain array values (e.g., Set-Cookie), simplified to string here
@@ -31,6 +34,7 @@ export class ServerRequestImpl implements ServerRequest {
     }
     this.cookies = data.cookies || {};
     this.path = data.path || '';
+    this.params = params;
     this.requestId = data.requestId;
     this.origin = context.origin;
     this.source = context.source!;

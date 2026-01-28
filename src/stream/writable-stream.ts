@@ -56,30 +56,27 @@ export class IframeWritableStream implements IIframeWritableStream {
   }
 
   /**
-   * Send message to client
+   * Send message (to client when server-side stream, to server when client-side stream)
    */
   private sendMessage(type: string, data?: Record<string, any>): void {
     if (!this.context) {
       throw new Error(Messages.STREAM_NOT_BOUND);
     }
-    
+    const isClientStream = this.context.clientId !== undefined && this.context.serverId === undefined;
+    const role = isClientStream ? MessageRole.CLIENT : MessageRole.SERVER;
+    const creatorId = this.context.serverId ?? this.context.clientId;
     const message = createPostMessage(type as any, this.context.requestId, {
       secretKey: this.context.secretKey,
       body: {
         streamId: this.streamId,
         ...data
       },
-      role: MessageRole.SERVER,
-      creatorId: this.context.serverId,
+      role,
+      creatorId,
       targetId: this.context.targetId
     });
     
-    // Use channel if available, otherwise use direct postMessage
-    if (this.context.channel) {
-      this.context.channel.send(this.context.targetWindow, message, this.context.targetOrigin);
-    } else {
-      this.context.targetWindow.postMessage(message, this.context.targetOrigin);
-    }
+    this.context.channel.send(this.context.targetWindow, message, this.context.targetOrigin);
   }
 
   /**

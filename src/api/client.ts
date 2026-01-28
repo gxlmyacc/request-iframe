@@ -54,6 +54,7 @@ export function requestIframeClient(
     ackTimeout: options?.ackTimeout,
     timeout: options?.timeout,
     asyncTimeout: options?.asyncTimeout,
+    returnData: options?.returnData,
     headers: options?.headers
   }, instanceId);
 

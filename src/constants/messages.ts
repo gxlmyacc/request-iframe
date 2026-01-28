@@ -39,6 +39,10 @@ const defaultMessages = {
   /** Client errors */
   IFRAME_NOT_READY: 'iframe.contentWindow is not available',
 
+  /** ClientServer warnings */
+  CLIENT_SERVER_IGNORED_MESSAGE_WHEN_CLOSED:
+    'Ignored message because client server is closed/destroyed (type: {0}, requestId: {1})',
+
   /** Stream related messages */
   STREAM_NOT_BOUND: 'Stream is not bound to a request context',
   STREAM_ALREADY_STARTED: 'Stream has already started',

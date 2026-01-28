@@ -6,7 +6,7 @@ import {
   PathMatcher
 } from '../types';
 import { isCompatibleVersion } from '../utils';
-import { matchPath } from '../utils/path-match';
+import { matchPath, matchPathWithParams } from '../utils/path-match';
 import { ServerRequestImpl } from './request';
 import { ServerResponseImpl } from './response';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
@@ -21,9 +21,11 @@ import {
   DefaultTimeout,
   ProtocolVersion,
   formatMessage,
-  MessageRole
+  MessageRole,
+  StreamType as StreamTypeConstant
 } from '../constants';
 import { isPromise } from '../utils';
+import { IframeReadableStream, IframeFileReadableStream, StreamMessageHandler, StreamMessageData } from '../stream';
 
 /**
  * Middleware item (contains path matcher and middleware function)
@@ -40,6 +42,20 @@ interface PendingAck {
   resolve: (received: boolean) => void;
   reject: (error: Error) => void;
   timeoutId: ReturnType<typeof setTimeout>;
+}
+
+/** Pending request waiting for client stream (streamId present) */
+interface PendingStreamRequest {
+  path: string;
+  requestId: string;
+  streamId: string;
+  handlerFn: ServerHandler;
+  targetWindow: Window;
+  targetOrigin: string;
+  res: ServerResponseImpl;
+  data: PostMessageData;
+  context: MessageContext;
+  params: Record<string, string>;
 }
 
 /**
@@ -74,6 +90,12 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   
   /** Responses waiting for client acknowledgment */
   private readonly pendingAcks = new Map<string, PendingAck>();
+
+  /** Pending requests waiting for client stream_start (streamId present) */
+  private readonly pendingStreamRequests = new Map<string, PendingStreamRequest>();
+
+  /** Stream message handlers (streamId -> handler) for client→server streams */
+  private readonly streamHandlers = new Map<string, (data: StreamMessageData) => void>();
   
   /** List of functions to unregister handlers */
   private readonly unregisterFns: Array<() => void> = [];
@@ -160,6 +182,145 @@ export class RequestIframeServerImpl implements RequestIframeServer {
         handlerOptions
       )
     );
+
+    // Handle stream_* messages (client→server stream)
+    this.unregisterFns.push(
+      this.dispatcher.registerHandler(
+        MessageType.STREAM_START,
+        (data, ctx) => this.handleStreamStart(data, ctx),
+        handlerOptions
+      )
+    );
+    this.unregisterFns.push(
+      this.dispatcher.registerHandler(
+        (type: string) => type.startsWith('stream_') && type !== MessageType.STREAM_START,
+        (data, _context) => this.dispatchStreamMessage(data),
+        handlerOptions
+      )
+    );
+  }
+
+  /** Handle stream_start from client (stream request with streamId) */
+  private handleStreamStart(data: PostMessageData, _context: MessageContext): void {
+    if (data.role !== MessageRole.CLIENT) return;
+    const body = data.body as StreamMessageData;
+    if (!body?.streamId) return;
+    const pending = this.pendingStreamRequests.get(data.requestId);
+    if (!pending || pending.streamId !== body.streamId) return;
+
+    this.pendingStreamRequests.delete(data.requestId);
+
+    const { targetWindow, targetOrigin, res, data: reqData, context: reqContext, handlerFn } = pending;
+
+    const streamHandler: StreamMessageHandler = {
+      registerStreamHandler: (streamId: string, handler: (d: StreamMessageData) => void) => {
+        this.streamHandlers.set(streamId, handler);
+      },
+      unregisterStreamHandler: (streamId: string) => {
+        this.streamHandlers.delete(streamId);
+      },
+      postMessage: (message: any) => {
+        this.dispatcher.send(targetWindow, message, targetOrigin);
+      }
+    };
+
+    const streamType = body.type || StreamTypeConstant.DATA;
+    const streamChunked = body.chunked ?? true;
+    const streamMetadata = body.metadata;
+
+    const req = new ServerRequestImpl(reqData, reqContext, res, pending.params);
+
+    // File stream: optionally auto-resolve to File/Blob before calling handler
+    if (streamType === StreamTypeConstant.FILE) {
+      const fileStream = new IframeFileReadableStream(body.streamId, data.requestId, streamHandler, {
+        chunked: streamChunked,
+        metadata: streamMetadata,
+        filename: streamMetadata?.filename,
+        mimeType: streamMetadata?.mimeType,
+        size: streamMetadata?.size
+      });
+
+      const autoResolve = body.autoResolve ?? false;
+      if (autoResolve) {
+        const name = fileStream.filename || streamMetadata?.filename;
+        const promise = name ? fileStream.readAsFile(name) : fileStream.readAsBlob();
+        promise
+          .then((fileData: File | Blob) => {
+            req.body = fileData;
+            req.stream = undefined;
+            this.runMiddlewares(req, res, () => {
+              try {
+                const result = handlerFn(req, res);
+                if (isPromise(result)) {
+                  this.dispatcher.sendMessage(
+                    targetWindow,
+                    targetOrigin,
+                    MessageType.ASYNC,
+                    data.requestId,
+                    { path: reqData.path, targetId: data.creatorId }
+                  );
+                  result
+                    .then(this.handleRequestResult.bind(this, res, targetWindow, targetOrigin, reqData))
+                    .catch(this.handleRequestError.bind(this, res, targetWindow, targetOrigin, reqData));
+                } else {
+                  this.handleRequestResult(res, targetWindow, targetOrigin, reqData, result);
+                }
+              } catch (error) {
+                this.handleRequestError(res, targetWindow, targetOrigin, reqData, error);
+              }
+            });
+          })
+          .catch((error) => {
+            this.handleRequestError(res, targetWindow, targetOrigin, reqData, error);
+          });
+        return;
+      }
+
+      // Non-autoResolve: expose stream directly
+      req.body = fileStream as any;
+      req.stream = fileStream as any;
+    } else {
+      // Non-file stream
+      const readableStream = new IframeReadableStream(body.streamId, data.requestId, streamHandler, {
+        type: streamType,
+        chunked: streamChunked,
+        metadata: streamMetadata
+      });
+      req.body = undefined;
+      req.stream = readableStream;
+    }
+
+    this.runMiddlewares(req, res, () => {
+      try {
+        const result = handlerFn(req, res);
+        if (isPromise(result)) {
+          this.dispatcher.sendMessage(
+            targetWindow,
+            targetOrigin,
+            MessageType.ASYNC,
+            data.requestId,
+            { path: reqData.path, targetId: data.creatorId }
+          );
+          result
+            .then(this.handleRequestResult.bind(this, res, targetWindow, targetOrigin, reqData))
+            .catch(this.handleRequestError.bind(this, res, targetWindow, targetOrigin, reqData));
+        } else {
+          this.handleRequestResult(res, targetWindow, targetOrigin, reqData, result);
+        }
+      } catch (error) {
+        this.handleRequestError(res, targetWindow, targetOrigin, reqData, error);
+      }
+    });
+  }
+
+  private dispatchStreamMessage(data: PostMessageData): void {
+    const body = data.body as StreamMessageData;
+    if (!body?.streamId) return;
+    const handler = this.streamHandlers.get(body.streamId);
+    if (handler) {
+      const messageType = (data.type as string).replace('stream_', '');
+      handler({ ...body, type: messageType as any });
+    }
   }
 
   /**
@@ -285,6 +446,34 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   }
 
   /**
+   * Find matching handler and extract path parameters
+   * @param requestPath The actual request path
+   * @returns Handler function and extracted parameters, or null if not found
+   */
+  private findHandler(requestPath: string): { handler: ServerHandler; params: Record<string, string> } | null {
+    const prefixedRequestPath = this.dispatcher.prefixPath(requestPath);
+
+    // First try exact match (for backward compatibility and performance)
+    const exactHandler = this.handlers.get(prefixedRequestPath);
+    if (exactHandler) {
+      return { handler: exactHandler, params: {} };
+    }
+
+    // Then try parameter matching (e.g., '/api/users/:id' matches '/api/users/123')
+    for (const [registeredPath, handler] of this.handlers.entries()) {
+      // Check if registered path contains parameters
+      if (registeredPath.includes(':')) {
+        const matchResult = matchPathWithParams(prefixedRequestPath, registeredPath);
+        if (matchResult.match) {
+          return { handler, params: matchResult.params };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Handle request
    */
   private handleRequest(data: PostMessageData, context: MessageContext): void {
@@ -300,10 +489,9 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     const targetWindow = context.source;
     const targetOrigin = context.origin;
 
-    // Use prefixed path to match registered handlers
-    const prefixedPath = this.dispatcher.prefixPath(data.path);
-    const handlerFn = this.handlers.get(prefixedPath);
-    if (!handlerFn) {
+    // Find matching handler and extract path parameters
+    const handlerMatch = this.findHandler(data.path);
+    if (!handlerMatch) {
       // No handler found in this instance
       // Mark as handled by this instance (using special marker) to prevent other instances from processing
       // This ensures only one instance sends the error response
@@ -326,6 +514,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       );
       return;
     }
+
+    const { handler: handlerFn, params } = handlerMatch;
 
     // Mark message as handled by this server instance to prevent other server instances from processing it
     context.handledBy = this.id;
@@ -367,8 +557,27 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       }
     );
 
-    // Create request object
-    const req = new ServerRequestImpl(data, context, res);
+    // Client sends body as stream: wait for stream_start, then create readable stream and call handler
+    // If streamId is present, this is a stream request
+    const streamId = (data as any).streamId as string | undefined;
+    if (streamId) {
+      this.pendingStreamRequests.set(data.requestId, {
+        path: data.path || '',
+        requestId: data.requestId,
+        streamId,
+        handlerFn,
+        targetWindow,
+        targetOrigin,
+        res,
+        data,
+        context,
+        params
+      });
+      return;
+    }
+
+    // Create request object with path parameters
+    const req = new ServerRequestImpl(data, context, res, params);
 
     // Execute middleware chain
     this.runMiddlewares(req, res, () => {

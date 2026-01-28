@@ -1,13 +1,15 @@
 /**
  * Stream functionality tests
  */
+import type { MessageChannel } from '../message';
 import {
   IframeWritableStream,
   IframeReadableStream,
   IframeFileWritableStream,
   IframeFileReadableStream,
   isIframeReadableStream,
-  isIframeFileStream,
+  isIframeFileReadableStream,
+  isIframeFileWritableStream,
   StreamMessageHandler
 } from '../stream';
 
@@ -15,12 +17,17 @@ describe('Stream', () => {
   describe('IframeWritableStream', () => {
     let mockTargetWindow: Window;
     let mockPostMessage: jest.Mock;
+    /** Mock channel: only send() is used by WritableStream */
+    let mockChannel: MessageChannel;
 
     beforeEach(() => {
       mockPostMessage = jest.fn();
       mockTargetWindow = {
         postMessage: mockPostMessage
       } as any;
+      mockChannel = {
+        send: (target: Window, message: any, origin: string) => target.postMessage(message, origin)
+      } as unknown as MessageChannel;
     });
 
     it('should create stream with default options', () => {
@@ -69,7 +76,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       await stream.start();
@@ -98,7 +106,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       await stream.start();
@@ -115,7 +124,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       await stream.start();
@@ -136,7 +146,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       await stream.start();
@@ -159,7 +170,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       await stream.start();
@@ -174,7 +186,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       stream.cancel('User cancelled');
@@ -192,7 +205,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       // Manually set state to ended (simulating already ended)
@@ -237,7 +251,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       stream.cancel('User cancelled');
@@ -261,7 +276,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       await stream.start();
@@ -284,7 +300,8 @@ describe('Stream', () => {
         requestId: 'req-123',
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
-        secretKey: 'test'
+        secretKey: 'test',
+        channel: mockChannel
       });
 
       const startPromise = stream.start();
@@ -637,14 +654,28 @@ describe('Stream', () => {
       expect(isIframeReadableStream('string')).toBe(false);
     });
 
-    it('isIframeFileStream should return true for IframeFileReadableStream', () => {
+    it('isIframeFileReadableStream should return true for IframeFileReadableStream', () => {
       const stream = new IframeFileReadableStream('id', 'reqId', mockHandler);
-      expect(isIframeFileStream(stream)).toBe(true);
+      expect(isIframeFileReadableStream(stream)).toBe(true);
     });
 
-    it('isIframeFileStream should return false for regular IframeReadableStream', () => {
+    it('isIframeFileReadableStream should return false for regular IframeReadableStream', () => {
       const stream = new IframeReadableStream('id', 'reqId', mockHandler);
-      expect(isIframeFileStream(stream)).toBe(false);
+      expect(isIframeFileReadableStream(stream)).toBe(false);
+    });
+
+    it('isIframeFileWritableStream should return true for IframeFileWritableStream', () => {
+      const stream = new IframeFileWritableStream({
+        filename: 'test.txt',
+        mimeType: 'text/plain',
+        next: async () => ({ data: btoa('test'), done: true })
+      });
+      expect(isIframeFileWritableStream(stream)).toBe(true);
+    });
+
+    it('isIframeFileWritableStream should return false for regular IframeWritableStream', () => {
+      const stream = new IframeWritableStream();
+      expect(isIframeFileWritableStream(stream)).toBe(false);
     });
   });
 });
