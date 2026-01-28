@@ -4,7 +4,7 @@ export { requestIframeServer, clearRequestIframeServerCache } from './api/server
 // Implementation classes
 export { RequestIframeClientImpl } from './core/client';
 export { RequestIframeServerImpl } from './core/server';
-export { RequestIframeClientServer } from './core/server-client';
+export { RequestIframeClientServer } from './core/client-server';
 // MessageChannel and MessageDispatcher
 export { MessageChannel, ChannelType, MessageDispatcher } from './message';
 export type {

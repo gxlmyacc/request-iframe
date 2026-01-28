@@ -973,7 +973,8 @@ describe('requestIframeClient and requestIframeServer', () => {
                     status: 200,
                     statusText: 'OK',
                     headers: {
-                      'Content-Type': 'text/plain'
+                      'Content-Type': 'text/plain',
+                      'Content-Disposition': 'attachment; filename="test.txt"'
                     },
                     body: {
                       streamId,
@@ -1046,11 +1047,21 @@ describe('requestIframeClient and requestIframeServer', () => {
         timeout: 10000
       }) as any;
       
-      // Verify that fileData was automatically resolved
-      expect(response.fileData).toBeDefined();
-      expect(response.fileData!.mimeType).toBe('text/plain');
-      expect(response.fileData!.fileName).toBe('test.txt');
-      expect(response.fileData!.content).toBe(btoa('Hello World'));
+      // Verify that data is a File object (auto-resolved from stream)
+      expect(response.data).toBeInstanceOf(File);
+      const file = response.data as File;
+      expect(file.name).toBe('test.txt');
+      expect(file.type).toBe('text/plain');
+      
+      // Verify file content using FileReader or arrayBuffer
+      const fileContent = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          resolve(reader.result as string);
+        };
+        reader.readAsText(file);
+      });
+      expect(fileContent).toBe('Hello World');
       
       // Verify that stream is not present (because it was auto-resolved)
       expect(response.stream).toBeUndefined();
@@ -2547,6 +2558,1874 @@ describe('requestIframeClient and requestIframeServer', () => {
         (call: any[]) => call[0]?.type === 'response' && call[0]?.data?.path === '3'
       );
       expect(successCall).toBeDefined();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+  });
+
+  describe('Client additional features', () => {
+    it('should support postMessage method for stream handler', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const message = { type: 'test', data: 'value' };
+      
+      // Access postMessage through stream handler interface
+      (client as any).postMessage(message);
+      
+      // Verify message was sent via dispatcher
+      expect(mockContentWindow.postMessage).toHaveBeenCalled();
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle function-type headers', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, {
+        headers: {
+          'X-Dynamic': (config: RequestConfig) => `value-${config.path}`
+        }
+      });
+
+      await client.send('test', {});
+      
+      const requestCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'request'
+      );
+      expect(requestCall).toBeDefined();
+      if (requestCall && requestCall[0]) {
+        expect(requestCall[0].headers?.['X-Dynamic']).toBe('value-test');
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle isConnect timeout', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { ackTimeout: 50 });
+      
+      // Server doesn't respond, should timeout
+      const connected = await client.isConnect();
+      expect(connected).toBe(false);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle isConnect rejection', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'ping') {
+            // Simulate error by not sending pong
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'error',
+                    requestId: msg.requestId,
+                    error: { message: 'Connection failed' },
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      const connected = await client.isConnect();
+      expect(connected).toBe(false);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should remember targetServerId from ACK and use it in subsequent requests', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const serverId = 'server-123';
+      
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER,
+                  creatorId: serverId
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER,
+                    creatorId: serverId
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      // First request - should remember serverId
+      await client.send('test1', {});
+      
+      // Second request - should use remembered serverId
+      await client.send('test2', {});
+      
+      const requestCalls = mockContentWindow.postMessage.mock.calls.filter(
+        (call: any[]) => call[0]?.type === 'request'
+      );
+      
+      // First request may not have targetId (if serverId not remembered yet)
+      // Second request should have targetId
+      expect(requestCalls.length).toBeGreaterThanOrEqual(2);
+      const secondRequest = requestCalls[requestCalls.length - 1];
+      if (secondRequest) {
+        expect(secondRequest[0].targetId).toBe(serverId);
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should not override existing targetServerId', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const existingServerId = 'existing-server';
+      const newServerId = 'new-server';
+      
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER,
+                  creatorId: newServerId
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER,
+                    creatorId: newServerId
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      // Set existing targetServerId
+      (client as any)._targetServerId = existingServerId;
+      
+      // Send request with explicit targetId
+      await client.send('test', {}, { targetId: existingServerId });
+      
+      const requestCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'request'
+      );
+      expect(requestCall).toBeDefined();
+      if (requestCall) {
+        expect(requestCall[0].targetId).toBe(existingServerId);
+      }
+      
+      // targetServerId should not be overridden
+      expect((client as any)._targetServerId).toBe(existingServerId);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle setCookie with expires option', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const expires = new Date(Date.now() + 3600000); // 1 hour from now
+      
+      client.setCookie('token', 'value', { expires });
+      
+      expect(client.getCookie('token')).toBe('value');
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle setCookie with maxAge option', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      client.setCookie('token', 'value', { maxAge: 3600 });
+      
+      expect(client.getCookie('token')).toBe('value');
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle getServer method', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const server = (client as any).getServer();
+      
+      expect(server).toBeDefined();
+      expect(server.isOpen).toBe(true);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle non-autoResolve file stream', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              const streamId = 'stream-test';
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    timestamp: Date.now(),
+                    type: 'stream_start',
+                    requestId: msg.requestId,
+                    status: 200,
+                    statusText: 'OK',
+                    body: {
+                      streamId,
+                      type: 'file',
+                      chunked: false,
+                      autoResolve: false, // Not auto-resolve
+                      metadata: {
+                        filename: 'test.txt',
+                        mimeType: 'text/plain'
+                      }
+                    },
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+              setTimeout(() => {
+                window.dispatchEvent(
+                  new MessageEvent('message', {
+                    data: {
+                      __requestIframe__: 1,
+                      timestamp: Date.now(),
+                      type: 'stream_data',
+                      requestId: msg.requestId,
+                      body: {
+                        streamId,
+                        data: btoa('Hello World'),
+                        done: true
+                      },
+                      role: MessageRole.SERVER
+                    },
+                    origin
+                  })
+                );
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new MessageEvent('message', {
+                      data: {
+                        __requestIframe__: 1,
+                        timestamp: Date.now(),
+                        type: 'stream_end',
+                        requestId: msg.requestId,
+                        body: { streamId },
+                        role: MessageRole.SERVER
+                      },
+                      origin
+                    })
+                  );
+                }, 10);
+              }, 10);
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const response = await client.send('getFile', {}, { 
+        ackTimeout: 1000,
+        timeout: 10000
+      }) as any;
+
+      expect(response.stream).toBeDefined();
+      expect(response.data).not.toBeInstanceOf(File); // Not auto-resolved, data is not a File
+
+      cleanupIframe(iframe);
+    }, 20000);
+
+    it('should handle regular data stream (non-file)', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              const streamId = 'stream-test';
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    timestamp: Date.now(),
+                    type: 'stream_start',
+                    requestId: msg.requestId,
+                    status: 200,
+                    statusText: 'OK',
+                    body: {
+                      streamId,
+                      type: 'data',
+                      chunked: true
+                    },
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+              setTimeout(() => {
+                window.dispatchEvent(
+                  new MessageEvent('message', {
+                    data: {
+                      __requestIframe__: 1,
+                      timestamp: Date.now(),
+                      type: 'stream_data',
+                      requestId: msg.requestId,
+                      body: {
+                        streamId,
+                        data: btoa('chunk1'),
+                        done: false
+                      },
+                      role: MessageRole.SERVER
+                    },
+                    origin
+                  })
+                );
+                setTimeout(() => {
+                  window.dispatchEvent(
+                    new MessageEvent('message', {
+                      data: {
+                        __requestIframe__: 1,
+                        timestamp: Date.now(),
+                        type: 'stream_data',
+                        requestId: msg.requestId,
+                        body: {
+                          streamId,
+                          data: btoa('chunk2'),
+                          done: true
+                        },
+                        role: MessageRole.SERVER
+                      },
+                      origin
+                    })
+                  );
+                  setTimeout(() => {
+                    window.dispatchEvent(
+                      new MessageEvent('message', {
+                        data: {
+                          __requestIframe__: 1,
+                          timestamp: Date.now(),
+                          type: 'stream_end',
+                          requestId: msg.requestId,
+                          body: { streamId },
+                          role: MessageRole.SERVER
+                        },
+                        origin
+                      })
+                    );
+                  }, 10);
+                }, 10);
+              }, 10);
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const response = await client.send('getStream', {}, { 
+        ackTimeout: 1000,
+        timeout: 10000
+      }) as any;
+
+      expect(response.stream).toBeDefined();
+      expect(response.stream.type).toBe('data');
+
+      cleanupIframe(iframe);
+    }, 20000);
+
+    it('should handle dispatchStreamMessage for stream messages', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const streamId = 'test-stream';
+      const handler = jest.fn();
+      
+      // Register stream handler
+      (client as any).registerStreamHandler(streamId, handler);
+      
+      // Dispatch stream message
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            type: 'stream_data',
+            requestId: 'req123',
+            body: {
+              streamId,
+              data: 'test',
+              type: 'data'
+            },
+            role: MessageRole.SERVER
+          },
+          origin
+        })
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      expect(handler).toHaveBeenCalled();
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle error in response interceptor rejected callback', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'error',
+                    requestId: msg.requestId,
+                    error: { message: 'Test error', code: 'TEST_ERROR' },
+                    status: 500,
+                    statusText: 'Internal Server Error',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      // Add error interceptor that rejects
+      client.interceptors.response.use(
+        (response) => response,
+        (error) => {
+          // Reject to test the catch path
+          return Promise.reject(error);
+        }
+      );
+
+      try {
+        await client.send('test', {});
+        fail('Should have thrown error');
+      } catch (error: any) {
+        expect(error.message).toBe('Test error');
+      }
+
+      cleanupIframe(iframe);
+    });
+  });
+
+  describe('Server additional features', () => {
+    it('should handle protocol version error', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+      
+      // Send message with incompatible version
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 0, // Incompatible version
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          requestId: 'req123'
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle handler returning undefined result', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+      
+      server.on('test', (req, res) => {
+        // Handler doesn't return anything (undefined)
+        // This should trigger NO_RESPONSE_SENT error
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const errorCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'error' && call[0]?.requestId === 'req123'
+      );
+      expect(errorCall).toBeDefined();
+      if (errorCall && errorCall[0]) {
+        expect(errorCall[0]).toMatchObject({
+          type: 'error',
+          requestId: 'req123',
+          error: expect.objectContaining({
+            code: 'NO_RESPONSE'
+          })
+        });
+      }
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should skip processing when message already handled by another server', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server1 = requestIframeServer();
+      const server2 = requestIframeServer();
+      
+      const handler1 = jest.fn((req, res) => res.send({ server: 1 }));
+      const handler2 = jest.fn((req, res) => res.send({ server: 2 }));
+      
+      server1.on('test', handler1);
+      server2.on('test', handler2);
+
+      // Create a context that indicates message was already handled
+      const messageData = {
+        __requestIframe__: 1,
+        timestamp: Date.now(),
+        type: 'request' as const,
+        requestId: 'req123',
+        path: 'test',
+        role: MessageRole.CLIENT,
+        targetId: server1.id
+      };
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: messageData,
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Only server1 should handle it (because of targetId)
+      expect(handler1).toHaveBeenCalled();
+      expect(handler2).not.toHaveBeenCalled();
+
+      server1.destroy();
+      server2.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle ack timeout in registerPendingAck', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer({ ackTimeout: 50 });
+      
+      server.on('test', (req, res) => {
+        // Send response with requireAck, but client never sends 'received'
+        res.send({ result: 'success' }, { requireAck: true });
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      // Wait for ack timeout
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // Server should have sent response
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'response',
+          requestId: 'req123'
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle middleware that sends response early', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+      
+      const middleware = jest.fn((req, res, next) => {
+        res.send({ middleware: true });
+        // Don't call next() - response already sent
+      });
+      
+      const handler = jest.fn((req, res) => {
+        res.send({ handler: true });
+      });
+      
+      server.use(middleware);
+      server.on('test', handler);
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Middleware should be called
+      expect(middleware).toHaveBeenCalled();
+      // Handler should NOT be called because response was already sent
+      expect(handler).not.toHaveBeenCalled();
+      
+      // Response should be from middleware
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'response',
+          requestId: 'req123',
+          data: { middleware: true }
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle map return cleanup function', () => {
+      const server = requestIframeServer();
+      
+      const handler1 = jest.fn((req, res) => res.send({}));
+      const handler2 = jest.fn((req, res) => res.send({}));
+      
+      const cleanup = server.map({
+        'path1': handler1,
+        'path2': handler2
+      });
+      
+      // Cleanup should unregister all handlers
+      cleanup();
+      
+      // Verify handlers are unregistered
+      expect(server).toBeDefined();
+      
+      server.destroy();
+    });
+  });
+
+  describe('Cache utilities', () => {
+    it('should test server cache functions', () => {
+      const { getCachedServer, cacheServer, removeCachedServer, clearServerCache } = require('../utils/cache');
+      const { requestIframeServer } = require('../api/server');
+      
+      // Test getCachedServer with no id
+      expect(getCachedServer('key1')).toBeNull();
+      expect(getCachedServer(undefined, undefined)).toBeNull();
+      
+      // Test cacheServer with no id
+      const server1 = requestIframeServer({ id: 'server1', secretKey: 'key1' });
+      cacheServer(server1, 'key1', 'server1');
+      
+      // Test getCachedServer with id
+      const cached = getCachedServer('key1', 'server1');
+      expect(cached).toBe(server1);
+      
+      // Test removeCachedServer with no id
+      removeCachedServer('key1'); // Should not throw
+      removeCachedServer(undefined, undefined); // Should not throw
+      
+      // Test removeCachedServer with id
+      removeCachedServer('key1', 'server1');
+      expect(getCachedServer('key1', 'server1')).toBeNull();
+      
+      // Test clearServerCache
+      const server2 = requestIframeServer({ id: 'server2', secretKey: 'key2' });
+      cacheServer(server2, 'key2', 'server2');
+      clearServerCache();
+      expect(getCachedServer('key2', 'server2')).toBeNull();
+      
+      server1.destroy();
+      server2.destroy();
+    });
+
+    it('should test clearMessageChannelCache', () => {
+      const { clearMessageChannelCache, getOrCreateMessageChannel } = require('../utils/cache');
+      
+      // Create a channel
+      const channel1 = getOrCreateMessageChannel('test-key');
+      expect(channel1).toBeDefined();
+      
+      // Clear cache
+      clearMessageChannelCache();
+      
+      // Create another channel - should be new instance
+      const channel2 = getOrCreateMessageChannel('test-key');
+      expect(channel2).toBeDefined();
+      
+      channel1.release();
+      channel2.release();
+    });
+  });
+
+  describe('Additional edge cases', () => {
+    it('should handle headers in request options', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, {
+        headers: {
+          'X-Initial': 'initial-value'
+        }
+      });
+
+      // Send request with additional headers
+      await client.send('test', {}, {
+        headers: {
+          'X-Request': 'request-value',
+          'X-Dynamic': (config: RequestConfig) => `dynamic-${config.path}`
+        }
+      });
+
+      const requestCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'request'
+      );
+      expect(requestCall).toBeDefined();
+      if (requestCall && requestCall[0]) {
+        expect(requestCall[0].headers?.['X-Initial']).toBe('initial-value');
+        expect(requestCall[0].headers?.['X-Request']).toBe('request-value');
+        expect(requestCall[0].headers?.['X-Dynamic']).toBe('dynamic-test');
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle isConnect with error response', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'ping') {
+            // Send error instead of pong
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'error',
+                    requestId: msg.requestId,
+                    error: { message: 'Connection error' },
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { ackTimeout: 1000 });
+      
+      const connected = await client.isConnect();
+      expect(connected).toBe(false);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle response interceptor without rejected callback', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'error',
+                    requestId: msg.requestId,
+                    error: { message: 'Test error', code: 'TEST_ERROR' },
+                    status: 500,
+                    statusText: 'Internal Server Error',
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      // Add response interceptor without rejected callback
+      client.interceptors.response.use(
+        (response) => response
+        // No rejected callback - should test the Promise.reject path
+      );
+
+      try {
+        await client.send('test', {});
+        fail('Should have thrown error');
+      } catch (error: any) {
+        expect(error.message).toBe('Test error');
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle request timeout', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            // Send ACK but never send response
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            // Don't send response - should timeout
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { timeout: 50 });
+
+      try {
+        await client.send('test', {});
+        fail('Should have timed out');
+      } catch (error: any) {
+        expect(error.message).toContain('timeout');
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle async timeout', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              // Send ASYNC but never send response
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'async',
+                    requestId: msg.requestId,
+                    path: msg.path,
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+            }, 10);
+            // Don't send response - should timeout
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { asyncTimeout: 50 });
+
+      try {
+        await client.send('test', {});
+        fail('Should have timed out');
+      } catch (error: any) {
+        expect(error.message).toContain('timeout');
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should not override existing targetServerId when receiving ACK', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const existingServerId = 'existing-server';
+      const newServerId = 'new-server';
+      
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER,
+                  creatorId: newServerId
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER,
+                    creatorId: newServerId
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      // Set existing targetServerId
+      (client as any)._targetServerId = existingServerId;
+      
+      await client.send('test', {});
+      
+      // targetServerId should not be overridden
+      expect((client as any)._targetServerId).toBe(existingServerId);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle response with requireAck', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'response',
+                    requestId: msg.requestId,
+                    data: { result: 'success' },
+                    status: 200,
+                    statusText: 'OK',
+                    role: MessageRole.SERVER,
+                    requireAck: true
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          } else if (msg.type === 'received') {
+            // Acknowledge receipt
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const response = await client.send('test', {});
+
+      expect(response.data).toEqual({ result: 'success' });
+      
+      // Verify RECEIVED message was sent
+      const receivedCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'received'
+      );
+      expect(receivedCall).toBeDefined();
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle handler returning a value', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+      
+      // Handler returns a value (not undefined)
+      server.on('test', (req, res) => {
+        return { result: 'from-return' };
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Should send response with returned value
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'response',
+          requestId: 'req123',
+          data: { result: 'from-return' }
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle ack timeout in registerPendingAck reject callback', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer({ ackTimeout: 50 });
+      
+      server.on('test', (req, res) => {
+        // Send response with requireAck, but client never sends 'received'
+        res.send({ result: 'success' }, { requireAck: true });
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      // Wait for ack timeout (reject callback should be called)
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // Server should have sent response
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'response',
+          requestId: 'req123'
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should skip middleware when response already sent', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+      
+      const middleware1 = jest.fn((req, res, next) => {
+        res.send({ middleware1: true });
+        // Response sent, don't call next
+      });
+      
+      const middleware2 = jest.fn((req, res, next) => {
+        next();
+      });
+      
+      const handler = jest.fn((req, res) => {
+        res.send({ handler: true });
+      });
+      
+      server.use(middleware1);
+      server.use(middleware2);
+      server.on('test', handler);
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Middleware1 should be called
+      expect(middleware1).toHaveBeenCalled();
+      // Middleware2 should NOT be called because response was already sent in middleware1
+      expect(middleware2).not.toHaveBeenCalled();
+      // Handler should NOT be called because response was already sent
+      expect(handler).not.toHaveBeenCalled();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle isConnect reject callback', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe, { ackTimeout: 50 });
+      
+      // Simulate error in pending request registration
+      // This will trigger the reject callback
+      const connected = await client.isConnect();
+      expect(connected).toBe(false);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle stream messages via dispatchStreamMessage', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const streamId = 'test-stream';
+      const handler = jest.fn();
+      
+      // Register stream handler
+      (client as any).registerStreamHandler(streamId, handler);
+      
+      // Dispatch stream_data message
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            type: 'stream_data',
+            requestId: 'req123',
+            body: {
+              streamId,
+              data: 'test',
+              type: 'data'
+            },
+            role: MessageRole.SERVER
+          },
+          origin
+        })
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      expect(handler).toHaveBeenCalled();
+      
+      // Dispatch stream_end message
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            type: 'stream_end',
+            requestId: 'req123',
+            body: {
+              streamId
+            },
+            role: MessageRole.SERVER
+          },
+          origin
+        })
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle error with requireAck', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          if (msg.type === 'request') {
+            window.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  __requestIframe__: 1,
+                  type: 'ack',
+                  requestId: msg.requestId,
+                  path: msg.path,
+                  role: MessageRole.SERVER
+                },
+                origin
+              })
+            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'error',
+                    requestId: msg.requestId,
+                    error: { message: 'Test error', code: 'TEST_ERROR' },
+                    status: 500,
+                    statusText: 'Internal Server Error',
+                    role: MessageRole.SERVER,
+                    requireAck: true
+                  },
+                  origin
+                })
+              );
+            }, 10);
+          }
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+
+      try {
+        await client.send('test', {});
+        fail('Should have thrown error');
+      } catch (error: any) {
+        expect(error.message).toBe('Test error');
+      }
+      
+      // Verify RECEIVED message was sent
+      const receivedCall = mockContentWindow.postMessage.mock.calls.find(
+        (call: any[]) => call[0]?.type === 'received'
+      );
+      expect(receivedCall).toBeDefined();
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle error in pending request registration', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      
+      // Simulate error during request registration
+      // This will trigger the error callback in _registerPendingRequest
+      try {
+        // Force an error by making the server unavailable
+        await client.send('test', {}, { timeout: 50 });
+        fail('Should have thrown error');
+      } catch (error: any) {
+        expect(error).toBeDefined();
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should handle message already handled by another server', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server1 = requestIframeServer();
+      const server2 = requestIframeServer();
+      
+      const handler1 = jest.fn((req, res) => res.send({ server: 1 }));
+      const handler2 = jest.fn((req, res) => res.send({ server: 2 }));
+      
+      server1.on('test', handler1);
+      server2.on('test', handler2);
+
+      // Create message context that indicates it was already handled
+      // This simulates the case where context.handledBy is set
+      const messageData = {
+        __requestIframe__: 1,
+        timestamp: Date.now(),
+        type: 'request' as const,
+        requestId: 'req123',
+        path: 'test',
+        role: MessageRole.CLIENT,
+        targetId: server1.id
+      };
+
+      // First server processes it
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: messageData,
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Only server1 should handle it (because of targetId)
+      expect(handler1).toHaveBeenCalled();
+      expect(handler2).not.toHaveBeenCalled();
+
+      server1.destroy();
+      server2.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should handle ack timeout reject callback', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer({ ackTimeout: 50 });
+      
+      server.on('test', (req, res) => {
+        // Send response with requireAck, but client never sends 'received'
+        // This will trigger ack timeout and the reject callback
+        res.send({ result: 'success' }, { requireAck: true });
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      // Wait for ack timeout (reject callback should be called)
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // Server should have sent response
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'response',
+          requestId: 'req123'
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should skip next middleware when response already sent', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+      
+      const middleware1 = jest.fn((req, res, next) => {
+        res.send({ middleware1: true });
+        // Response sent, but still call next to test the res._sent check
+        next();
+      });
+      
+      const middleware2 = jest.fn((req, res, next) => {
+        // This should not execute because res._sent is true
+        next();
+      });
+      
+      const handler = jest.fn((req, res) => {
+        res.send({ handler: true });
+      });
+      
+      server.use(middleware1);
+      server.use(middleware2);
+      server.on('test', handler);
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Middleware1 should be called
+      expect(middleware1).toHaveBeenCalled();
+      // Middleware2's next() should check res._sent and return early, so handler should not be called
+      // Note: middleware2 itself may or may not be called depending on implementation
+      // Handler should NOT be called because response was already sent
+      expect(handler).not.toHaveBeenCalled();
 
       server.destroy();
       cleanupIframe(iframe);

@@ -70,7 +70,8 @@ export class IframeWritableStream implements IIframeWritableStream {
         ...data
       },
       role: MessageRole.SERVER,
-      senderId: this.context.serverId
+      creatorId: this.context.serverId,
+      targetId: this.context.targetId
     });
     
     // Use channel if available, otherwise use direct postMessage

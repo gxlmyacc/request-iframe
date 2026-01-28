@@ -48,6 +48,8 @@ interface PendingAck {
 export interface ServerOptions {
   /** Message isolation secret key */
   secretKey?: string;
+  /** Custom server instance ID (if specified, server will use this ID instead of generating one) */
+  id?: string;
   /** ACK timeout duration */
   ackTimeout?: number;
   /** Protocol version validator (optional, uses built-in validator by default) */
@@ -80,7 +82,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   private _isOpen = false;
 
   public constructor(options?: ServerOptions) {
-    this.id = generateInstanceId();
+    // Use custom id if provided, otherwise generate one
+    this.id = options?.id || generateInstanceId();
     this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.versionValidator = options?.versionValidator ?? isCompatibleVersion;
     
@@ -225,6 +228,14 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     err: any
   ) {
     if (!res._sent) {
+      /** 
+       * Use INTERNAL_SERVER_ERROR (500) for handler errors unless a different error status code was explicitly set.
+       * If statusCode is still the default OK (200), override it to INTERNAL_SERVER_ERROR.
+       */
+      const errorStatus = res.statusCode === HttpStatus.OK 
+        ? HttpStatus.INTERNAL_SERVER_ERROR 
+        : res.statusCode;
+      
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -236,9 +247,10 @@ export class RequestIframeServerImpl implements RequestIframeServer {
             message: (err && err.message) || Messages.REQUEST_FAILED,
             code: (err && err.code) || ErrorCode.REQUEST_ERROR
           },
-          status: res.statusCode || HttpStatus.INTERNAL_SERVER_ERROR,
-          statusText: HttpStatusText[HttpStatus.INTERNAL_SERVER_ERROR],
-          headers: res.headers
+          status: errorStatus,
+          statusText: HttpStatusText[errorStatus] || HttpStatusText[HttpStatus.INTERNAL_SERVER_ERROR],
+          headers: res.headers,
+          targetId: data.creatorId
         }
       );
     }
@@ -276,7 +288,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
    * Handle request
    */
   private handleRequest(data: PostMessageData, context: MessageContext): void {
-    if (!data.path) return;
+    // If targetId is specified, only process if it matches this server's id
+    if (!data.path || (data.targetId && data.targetId !== this.id)) return;
     if (!context.source) return;
 
     // If message has already been handled by another server instance, skip processing
@@ -297,6 +310,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       context.handledBy = this.id;
       
       // Send METHOD_NOT_FOUND error
+      // Use request's creatorId as targetId to route back to the correct client
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -306,7 +320,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
           path: data.path,
           error: { message: Messages.METHOD_NOT_FOUND, code: ErrorCode.METHOD_NOT_FOUND },
           status: HttpStatus.NOT_FOUND,
-          statusText: HttpStatusText[HttpStatus.NOT_FOUND]
+          statusText: HttpStatusText[HttpStatus.NOT_FOUND],
+          targetId: data.creatorId
         }
       );
       return;
@@ -316,15 +331,20 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     context.handledBy = this.id;
 
     // Send ACK immediately via dispatcher
+    // Use request's creatorId as targetId to route back to the correct client
     this.dispatcher.sendMessage(
       targetWindow,
       targetOrigin,
       MessageType.ACK,
       data.requestId,
-      { path: data.path }
+      { 
+        path: data.path,
+        targetId: data.creatorId
+      }
     );
 
     // Create response object with channel reference
+    // Pass request's creatorId as targetId so responses are routed back to the correct client
     const res = new ServerResponseImpl(
       data.requestId,
       data.path || '',
@@ -332,7 +352,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       targetWindow,
       targetOrigin,
       this.dispatcher.getChannel(),
-      this.id
+      this.id,
+      data.creatorId
     );
 
     // Register callback waiting for client acknowledgment
@@ -357,12 +378,16 @@ export class RequestIframeServerImpl implements RequestIframeServer {
 
         if (isPromise(result)) {
           // Async task
+          // Use request's creatorId as targetId to route back to the correct client
           this.dispatcher.sendMessage(
             targetWindow,
             targetOrigin,
             MessageType.ASYNC,
             data.requestId,
-            { path: data.path }
+            { 
+              path: data.path,
+              targetId: data.creatorId
+            }
           );
   
           result.then(

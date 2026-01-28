@@ -77,11 +77,17 @@ export function setupClientDebugInterceptors(client: RequestIframeClient): void 
         headers: response.headers
       };
       
-      if (response.fileData) {
+      // Check if response.data is a File or Blob
+      if (response.data instanceof File || response.data instanceof Blob) {
+        const file = response.data;
+        const fileName = file instanceof File ? file.name : undefined;
+        const mimeType = file.type || undefined;
+        const contentLength = file.size;
+        
         logData.fileData = {
-          fileName: response.fileData.fileName,
-          mimeType: response.fileData.mimeType,
-          contentLength: response.fileData.content?.length || 0
+          fileName,
+          mimeType,
+          contentLength
         };
         log('info', Messages.DEBUG_CLIENT_REQUEST_SUCCESS_FILE, formatMessageData(logData));
       } else if (response.stream) {
@@ -439,7 +445,7 @@ function setupServerMessageDebugging(serverImpl: any): void {
         path: data.path,
         origin: context?.origin,
         role: data.role,
-        senderId: data.senderId
+        creatorId: data.creatorId
       }));
       return originalHandleRequest(data, context);
     };

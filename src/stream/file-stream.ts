@@ -156,6 +156,18 @@ export class IframeFileReadableStream
   }
 
   /**
+   * Read as File
+   * @param fileName Optional file name (if not provided, uses stream's filename)
+   */
+  public async readAsFile(fileName?: string): Promise<File> {
+    const data = await this.read();
+    // Use slice to create a pure ArrayBuffer copy to avoid type issues
+    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    const name = fileName || this.filename || 'file';
+    return new File([buffer], name, { type: this.mimeType || 'application/octet-stream' });
+  }
+
+  /**
    * Read as ArrayBuffer
    */
   public async readAsArrayBuffer(): Promise<ArrayBuffer> {

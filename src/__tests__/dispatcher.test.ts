@@ -362,7 +362,7 @@ describe('MessageDispatcher', () => {
   });
 
   describe('send', () => {
-    it('should send message with role and senderId', () => {
+    it('should send message with role and creatorId', () => {
       const targetWindow = {
         postMessage: jest.fn()
       } as any;
@@ -371,16 +371,16 @@ describe('MessageDispatcher', () => {
         path: 'test'
       });
       delete (message as any).role;
-      delete (message as any).senderId;
+      delete (message as any).creatorId;
       
       dispatcher.send(targetWindow, message, 'https://example.com');
       
       expect(message.role).toBe(MessageRole.CLIENT);
-      expect(message.senderId).toBe('instance-1');
+      expect(message.creatorId).toBe('instance-1');
       expect(targetWindow.postMessage).toHaveBeenCalled();
     });
 
-    it('should not override existing role and senderId', () => {
+    it('should not override existing role and creatorId', () => {
       const targetWindow = {
         postMessage: jest.fn()
       } as any;
@@ -388,13 +388,13 @@ describe('MessageDispatcher', () => {
       const message = createPostMessage(MessageType.REQUEST, 'req123', {
         path: 'test',
         role: MessageRole.SERVER,
-        senderId: 'custom-id'
+        creatorId: 'custom-id'
       });
       
       dispatcher.send(targetWindow, message, 'https://example.com');
       
       expect(message.role).toBe(MessageRole.SERVER);
-      expect(message.senderId).toBe('custom-id');
+      expect(message.creatorId).toBe('custom-id');
     });
 
     it('should use default origin * when not specified', () => {
@@ -416,7 +416,7 @@ describe('MessageDispatcher', () => {
   });
 
   describe('sendMessage', () => {
-    it('should create and send message with role and senderId', () => {
+    it('should create and send message with role and creatorId', () => {
       const targetWindow = {
         postMessage: jest.fn()
       } as any;
@@ -439,7 +439,7 @@ describe('MessageDispatcher', () => {
           path: 'test',
           body: { param: 'value' },
           role: MessageRole.CLIENT,
-          senderId: 'instance-1'
+          creatorId: 'instance-1'
         }),
         'https://example.com'
       );

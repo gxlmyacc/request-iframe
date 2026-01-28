@@ -34,6 +34,13 @@
   - [追踪模式](#追踪模式)
   - [多语言支持](#多语言支持)
 - [API 参考](#api-参考)
+- [React Hooks](#react-hooks)
+  - [useClient](#useclienttargetfnorref-options-deps)
+  - [useServer](#useserveroptions-deps)
+  - [useServerHandler](#useserverhandlerserver-path-handler-deps)
+  - [useServerHandlerMap](#useserverhandlermapserver-map-deps)
+  - [完整示例](#完整示例)
+  - [最佳实践](#最佳实践)
 - [错误处理](#错误处理)
 - [FAQ](#faq)
 - [开发](#开发)
@@ -864,16 +871,11 @@ await client.send('/api/longTask', {}, {
 
 ```typescript
 interface Response<T = any> {
-  data: T;                    // 响应数据
+  data: T;                    // 响应数据（自动解析的文件流为 File/Blob）
   status: number;             // 状态码
   statusText: string;         // 状态文本
   requestId: string;          // 请求 ID
   headers?: Record<string, string | string[]>;  // 响应 headers（Set-Cookie 为数组）
-  fileData?: {                // 文件数据（如果有）
-    content: string;          // base64 编码内容
-    mimeType?: string;
-    fileName?: string;
-  };
   stream?: IIframeReadableStream<T>;  // 流响应（如果有）
 }
 ```
@@ -984,7 +986,262 @@ server.use(['/a', '/b'], (req, res, next) => { ... });
 
 销毁 Server 实例，移除所有监听器。
 
-### ServerRequest 对象
+---
+
+## React Hooks
+
+request-iframe 提供了 React hooks，方便在 React 应用中使用。从 `request-iframe/react` 导入 hooks：
+
+```typescript
+import { useClient, useServer, useServerHandler, useServerHandlerMap } from 'request-iframe/react';
+```
+
+### useClient(targetFnOrRef, options?, deps?)
+
+用于使用 request-iframe client 的 React hook。
+
+**参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `targetFnOrRef` | `(() => HTMLIFrameElement \| Window \| null) \| RefObject<HTMLIFrameElement \| Window>` | 返回 iframe 元素或 Window 对象的函数，或 React ref 对象 |
+| `options` | `RequestIframeClientOptions` | Client 选项（可选） |
+| `deps` | `readonly unknown[]` | 依赖数组（可选，当依赖变化时重新创建 client） |
+
+**返回值：** `RequestIframeClient | null`
+
+**示例：**
+
+```tsx
+import { useClient } from 'request-iframe/react';
+import { useRef } from 'react';
+
+const MyComponent = () => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const client = useClient(iframeRef, { secretKey: 'my-app' });
+
+  const handleClick = async () => {
+    if (client) {
+      const response = await client.send('/api/data', { id: 1 });
+      console.log(response.data);
+    }
+  };
+
+  return (
+    <div>
+      <iframe ref={iframeRef} src="/iframe.html" />
+      <button onClick={handleClick}>发送请求</button>
+    </div>
+  );
+};
+```
+
+**使用函数而不是 ref：**
+
+```tsx
+const MyComponent = () => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const client = useClient(() => iframeRef.current, { secretKey: 'my-app' });
+  // ...
+};
+```
+
+### useServer(options?, deps?)
+
+用于使用 request-iframe server 的 React hook。
+
+**参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `options` | `RequestIframeServerOptions` | Server 选项（可选） |
+| `deps` | `readonly unknown[]` | 依赖数组（可选，当依赖变化时重新创建 server） |
+
+**返回值：** `RequestIframeServer | null`
+
+**示例：**
+
+```tsx
+import { useServer } from 'request-iframe/react';
+
+const MyComponent = () => {
+  const server = useServer({ secretKey: 'my-app' });
+
+  useEffect(() => {
+    if (!server) return;
+
+    const off = server.on('/api/data', (req, res) => {
+      res.send({ data: 'Hello' });
+    });
+
+    return off; // 组件卸载时清理
+  }, [server]);
+
+  return <div>Server 组件</div>;
+};
+```
+
+### useServerHandler(server, path, handler, deps?)
+
+用于注册单个 server handler 的 React hook，自动处理清理和闭包问题。
+
+**参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `server` | `RequestIframeServer \| null` | Server 实例（来自 `useServer`） |
+| `path` | `string` | 路由路径 |
+| `handler` | `ServerHandler` | 处理函数 |
+| `deps` | `readonly unknown[]` | 依赖数组（可选，当依赖变化时重新注册） |
+
+**示例：**
+
+```tsx
+import { useServer, useServerHandler } from 'request-iframe/react';
+import { useState } from 'react';
+
+const MyComponent = () => {
+  const server = useServer();
+  const [userId, setUserId] = useState(1);
+
+  // Handler 自动使用最新的 userId 值
+  useServerHandler(server, '/api/user', (req, res) => {
+    res.send({ userId, data: 'Hello' });
+  }, [userId]); // 当 userId 变化时重新注册
+
+  return <div>Server 组件</div>;
+};
+```
+
+**关键特性：**
+- 自动处理闭包问题 - 始终使用依赖项的最新值
+- 组件卸载或依赖变化时自动取消注册 handler
+- 无需手动管理 handler 的注册/清理
+
+### useServerHandlerMap(server, map, deps?)
+
+用于批量注册多个 server handlers 的 React hook，自动处理清理。
+
+**参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `server` | `RequestIframeServer \| null` | Server 实例（来自 `useServer`） |
+| `map` | `Record<string, ServerHandler>` | 路由路径和处理函数的映射 |
+| `deps` | `readonly unknown[]` | 依赖数组（可选，当依赖变化时重新注册） |
+
+**示例：**
+
+```tsx
+import { useServer, useServerHandlerMap } from 'request-iframe/react';
+import { useState } from 'react';
+
+const MyComponent = () => {
+  const server = useServer();
+  const [userId, setUserId] = useState(1);
+
+  // 一次性注册多个 handlers
+  useServerHandlerMap(server, {
+    '/api/user': (req, res) => {
+      res.send({ userId, data: '用户数据' });
+    },
+    '/api/posts': (req, res) => {
+      res.send({ userId, data: '文章数据' });
+    }
+  }, [userId]); // 当 userId 变化时重新注册所有 handlers
+
+  return <div>Server 组件</div>;
+};
+```
+
+**关键特性：**
+- 批量注册多个 handlers
+- 自动处理闭包问题 - 始终使用依赖项的最新值
+- 组件卸载或依赖变化时自动取消注册所有 handlers
+- 高效 - 仅在 map 的键变化时重新注册
+
+### 完整示例
+
+以下是一个完整的示例，展示如何在真实应用中使用 React hooks：
+
+```tsx
+import { useClient, useServer, useServerHandler } from 'request-iframe/react';
+import { useRef, useState } from 'react';
+
+// 父组件（Client）
+const ParentComponent = () => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const client = useClient(iframeRef, { secretKey: 'my-app' });
+  const [data, setData] = useState(null);
+
+  const fetchData = async () => {
+    if (!client) return;
+    
+    try {
+      const response = await client.send('/api/data', { id: 1 });
+      setData(response.data);
+    } catch (error) {
+      console.error('请求失败:', error);
+    }
+  };
+
+  return (
+    <div>
+      <iframe ref={iframeRef} src="/iframe.html" />
+      <button onClick={fetchData}>获取数据</button>
+      {data && <pre>{JSON.stringify(data, null, 2)}</pre>}
+    </div>
+  );
+};
+
+// Iframe 组件（Server）
+const IframeComponent = () => {
+  const server = useServer({ secretKey: 'my-app' });
+  const [userId, setUserId] = useState(1);
+
+  // 注册 handler，自动清理
+  useServerHandler(server, '/api/data', async (req, res) => {
+    // Handler 始终使用最新的 userId 值
+    const userData = await fetchUserData(userId);
+    res.send(userData);
+  }, [userId]);
+
+  return (
+    <div>
+      <p>用户 ID: {userId}</p>
+      <button onClick={() => setUserId(userId + 1)}>增加</button>
+    </div>
+  );
+};
+```
+
+### 最佳实践
+
+1. **始终检查 null**：Client 和 server hooks 在初始时或目标不可用时可能返回 `null`：
+   ```tsx
+   const client = useClient(iframeRef);
+   if (!client) return null; // 处理 null 情况
+   ```
+
+2. **使用依赖数组**：向 hooks 传递依赖项，确保 handlers 使用最新值：
+   ```tsx
+   useServerHandler(server, '/api/data', (req, res) => {
+     res.send({ userId }); // 始终使用最新的 userId
+   }, [userId]); // 当 userId 变化时重新注册
+   ```
+
+3. **自动清理**：Hooks 在组件卸载时自动清理，但你也可以手动取消注册：
+   ```tsx
+   useEffect(() => {
+     if (!server) return;
+     const off = server.on('/api/data', handler);
+     return off; // 手动清理（可选，hooks 会自动处理）
+   }, [server]);
+   ```
+
+---
+
+## 错误处理
 
 ```typescript
 interface ServerRequest {

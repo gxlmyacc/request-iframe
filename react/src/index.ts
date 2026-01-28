@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   requestIframeClient,
   requestIframeServer,
@@ -162,17 +162,24 @@ export function useServerHandler(
   handler: ServerHandler,
   deps: readonly unknown[]
 ): void {
+  const handlerRef = useRef<ServerHandler>(handler);
+  handlerRef.current = handler;
+
+  const handlerWrapper = useCallback((req: any, res: any) => {
+    return handlerRef.current?.(req, res);
+  }, []);
+
   useEffect(() => {
     if (!server) {
       return;
     }
 
-    // Register handler
-    const off = server.on(path, handler);
+    // Register handler with stable wrapper
+    const off = server.on(path, handlerWrapper);
 
     // Cleanup: unregister handler on unmount or when deps change
     return off;
-  }, [server, path, ...(deps || [])]);
+  }, [server, path, handlerWrapper, ...(deps || [])]);
 }
 
 /**
@@ -207,14 +214,30 @@ export function useServerHandlerMap(
   map: Record<string, ServerHandler>,
   deps: readonly unknown[]
 ): void {
+  const mapRef = useRef<Record<string, ServerHandler>>(map);
+  mapRef.current = map;
+
+  const keys = useMemo(() => {
+    return Object.keys(map).sort();
+  }, [map]);
+
+  const mapWrapper = useMemo(() => {
+    return keys.reduce((acc, key) => {
+      acc[key] = function (req: any, res: any) {
+        return mapRef.current?.[key]?.call(this, req, res);
+      };
+      return acc;
+    }, {} as Record<string, ServerHandler>);
+  }, [keys]);
+
   useEffect(() => {
     if (!server) {
       return;
     }
-    // Register handlers using map
-    const off = server.map(map);
+    // Register handlers using map with stable wrappers
+    const off = server.map(mapWrapper);
 
     // Cleanup: unregister all handlers on unmount or when deps change
     return off;
-  }, [server, ...(deps || [])]);
+  }, [server, mapWrapper, ...(deps || [])]);
 }

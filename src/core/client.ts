@@ -20,7 +20,7 @@ import {
   runRequestInterceptors,
   runResponseInterceptors
 } from '../interceptors';
-import { RequestIframeClientServer } from './server-client';
+import { RequestIframeClientServer } from './client-server';
 import {
   DefaultTimeout,
   ErrorCode,
@@ -85,6 +85,12 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    * value: stream message handler function
    */
   private readonly streamHandlers = new Map<string, (data: StreamMessageData) => void>();
+
+  /** 
+   * Target server ID (remembered from responses)
+   * When a response is received, we remember the server's creatorId as the targetId for future requests
+   */
+  private _targetServerId?: string;
 
   public constructor(
     targetWindow: Window,
@@ -256,11 +262,15 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       path: processedPath,
       body: processedBody,
       cookies: processedCookies,
+      targetId: userTargetId,
       ackTimeout = this.defaultAckTimeout,
       timeout = this.defaultTimeout,
       asyncTimeout = this.defaultAsyncTimeout,
-      requestId = generateRequestId()
+      requestId = generateRequestId(),
     } = processedConfig;
+
+    // Use user-specified targetId, or remembered target server ID, or undefined
+    const targetId = userTargetId || this._targetServerId;
 
     return new Promise<Response<T>>((resolve, reject) => {
       const prefixedPath = this.prefixPath(processedPath);
@@ -276,7 +286,25 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         if (done) return;
         done = true;
         cleanup();
-        reject(error);
+        // Run response interceptors to allow error logging
+        Promise.reject(error)
+          .catch((err) => {
+            // Run through response interceptors' rejected callbacks
+            let promise: Promise<any> = Promise.reject(err);
+            this.interceptors.response.forEach((interceptor) => {
+              promise = promise.catch((e) => {
+                if (interceptor.rejected) {
+                  return interceptor.rejected(e);
+                }
+                return Promise.reject(e);
+              });
+            });
+            return promise;
+          })
+          .catch(() => {
+            // After interceptors, reject with original error
+            reject(error);
+          });
       };
 
       const setAckTimeout = () => {
@@ -323,6 +351,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
           // Received ACK: server has received request
           if (data.type === MessageType.ACK) {
+            // Remember server's creatorId as target server ID for future requests
+            if (data.creatorId && !this._targetServerId) {
+              this._targetServerId = data.creatorId;
+            }
             // Switch to request timeout
             setRequestTimeout();
             return;
@@ -330,6 +362,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
           // Received ASYNC notification: this is an async task
           if (data.type === MessageType.ASYNC) {
+            // Remember server's creatorId as target server ID for future requests
+            if (data.creatorId && !this._targetServerId) {
+              this._targetServerId = data.creatorId;
+            }
             // Switch to async timeout
             setAsyncTimeout();
             return;
@@ -362,29 +398,34 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                 }
               );
 
-              // If autoResolve is enabled, automatically read and convert to fileData
+              // If autoResolve is enabled, automatically read and convert to File/Blob
               if (autoResolve) {
-                // Automatically read the stream and convert to fileData
-                readableStream.read()
-                  .then((uint8Array: Uint8Array) => {
-                    // Convert Uint8Array to base64 string
-                    let binary = '';
-                    for (let i = 0; i < uint8Array.length; i++) {
-                      binary += String.fromCharCode(uint8Array[i]);
-                    }
-                    const base64Content = btoa(binary);
+                // Extract fileName from headers if available
+                const contentDisposition = data.headers?.[HttpHeader.CONTENT_DISPOSITION];
+                let fileName: string | undefined;
+                if (contentDisposition) {
+                  const disposition = typeof contentDisposition === 'string' ? contentDisposition : contentDisposition[0];
+                  const filenameMatch = disposition.match(/filename="?([^"]+)"?/i);
+                  if (filenameMatch) {
+                    fileName = filenameMatch[1];
+                  }
+                }
+                // Fallback to stream metadata if not found in headers
+                fileName = fileName || streamMetadata?.filename || readableStream.filename;
 
+                // Use stream's readAsFile or readAsBlob method
+                const fileDataPromise = fileName
+                  ? readableStream.readAsFile(fileName)
+                  : readableStream.readAsBlob();
+
+                fileDataPromise
+                  .then((fileData: File | Blob) => {
                     const resp: Response<T> = {
-                      data: undefined as any,
+                      data: fileData as any,
                       status: data.status || HttpStatus.OK,
                       statusText: data.statusText || HttpStatusText[HttpStatus.OK],
                       requestId,
-                      headers: data.headers,
-                      fileData: {
-                        content: base64Content,
-                        mimeType: streamMetadata?.mimeType || readableStream.mimeType || 'application/octet-stream',
-                        fileName: streamMetadata?.filename || readableStream.filename
-                      }
+                      headers: data.headers
                     };
                     
                     return runResponseInterceptors(this.interceptors.response, resp);
@@ -448,6 +489,11 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
             done = true;
             cleanup();
 
+            // Remember server's creatorId as target server ID for future requests
+            if (data.creatorId && !this._targetServerId) {
+              this._targetServerId = data.creatorId;
+            }
+
             // If server requires acknowledgment, send received message
             if (data.requireAck) {
               this.server.messageDispatcher.sendMessage(
@@ -455,7 +501,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                 this.targetOrigin,
                 MessageType.RECEIVED,
                 requestId,
-                { path: prefixedPath }
+                { 
+                  path: prefixedPath,
+                  targetId: data.creatorId
+                }
               );
             }
 
@@ -473,8 +522,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               status: data.status || HttpStatus.OK,
               statusText: data.statusText || HttpStatusText[HttpStatus.OK],
               requestId,
-              headers: data.headers,
-              fileData: data.fileData
+              headers: data.headers
             };
             runResponseInterceptors(this.interceptors.response, resp)
               .then(resolve)
@@ -484,6 +532,11 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
           // Received error
           if (data.type === MessageType.ERROR) {
+            // Remember server's creatorId as target server ID for future requests
+            if (data.creatorId && !this._targetServerId) {
+              this._targetServerId = data.creatorId;
+            }
+
             // If server requires acknowledgment, send received message
             if (data.requireAck) {
               this.server.messageDispatcher.sendMessage(
@@ -491,7 +544,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                 this.targetOrigin,
                 MessageType.RECEIVED,
                 requestId,
-                { path: prefixedPath }
+                { 
+                  path: prefixedPath,
+                  targetId: data.creatorId
+                }
               );
             }
 
@@ -539,7 +595,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
           path: prefixedPath,
           body: processedBody,
           headers: mergedHeaders,
-          cookies: mergedCookies
+          cookies: mergedCookies,
+          targetId
         }
       );
     });

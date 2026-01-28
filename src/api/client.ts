@@ -1,6 +1,6 @@
 import { ErrorResponse, RequestIframeClient, RequestIframeClientOptions } from '../types';
 import { getIframeTargetOrigin, generateInstanceId } from '../utils';
-import { RequestIframeClientServer } from '../core/server-client';
+import { RequestIframeClientServer } from '../core/client-server';
 import { RequestIframeClientImpl } from '../core/client';
 import { setupClientDebugInterceptors } from '../utils/debug';
 import { Messages, ErrorCode } from '../constants';

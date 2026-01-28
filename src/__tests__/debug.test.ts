@@ -30,6 +30,24 @@ describe('debug', () => {
     console.info = jest.fn();
     console.warn = jest.fn();
     console.error = jest.fn();
+    // Clear all iframes
+    document.querySelectorAll('iframe').forEach((iframe) => {
+      if (iframe.parentNode) {
+        iframe.parentNode.removeChild(iframe);
+      }
+    });
+  });
+
+  afterEach(() => {
+    // Clear all caches
+    clearRequestIframeClientCache();
+    clearRequestIframeServerCache();
+    // Clear all iframes
+    document.querySelectorAll('iframe').forEach((iframe) => {
+      if (iframe.parentNode) {
+        iframe.parentNode.removeChild(iframe);
+      }
+    });
   });
 
   describe('setupClientDebugInterceptors', () => {
@@ -82,7 +100,6 @@ describe('debug', () => {
       await client.send('test', { param: 'value' }, { ackTimeout: 1000 });
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Client] Request Start'),
         expect.objectContaining({
           path: 'test',
@@ -91,7 +108,6 @@ describe('debug', () => {
       );
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Client] Request Success'),
         expect.objectContaining({
           requestId: expect.any(String),
@@ -118,13 +134,15 @@ describe('debug', () => {
       setupClientDebugInterceptors(client);
 
       try {
-        await client.send('test', undefined, { ackTimeout: 100 });
+        await client.send('test', undefined, { ackTimeout: 50, timeout: 100 });
       } catch (error) {
         // Expected to fail
       }
 
+      // Wait a bit for error logging
+      await new Promise(resolve => setTimeout(resolve, 150));
+
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Client] Request Failed'),
         expect.objectContaining({
           code: expect.any(String)
@@ -164,6 +182,10 @@ describe('debug', () => {
                     requestId: msg.requestId,
                     status: 200,
                     statusText: 'OK',
+                    headers: {
+                      'Content-Type': 'text/plain',
+                      'Content-Disposition': 'attachment; filename="test.txt"'
+                    },
                     body: {
                       streamId,
                       type: 'file',
@@ -230,9 +252,11 @@ describe('debug', () => {
         timeout: 10000
       }) as any;
 
-      expect(response.fileData).toBeDefined();
+      expect(response.data).toBeInstanceOf(File);
+      const file = response.data as File;
+      expect(file.name).toBe('test.txt');
+      
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Client] Request Success (File)'),
         expect.objectContaining({
           fileData: expect.objectContaining({
@@ -251,18 +275,36 @@ describe('debug', () => {
       const mockContentWindow = {
         postMessage: jest.fn((msg: any) => {
           if (msg.type === 'request') {
-            window.dispatchEvent(
-              new MessageEvent('message', {
-                data: {
-                  __requestIframe__: 1,
-                  type: 'ack',
-                  requestId: msg.requestId,
-                  path: msg.path,
-                  role: MessageRole.SERVER
-                },
-                origin
-              })
-            );
+            setTimeout(() => {
+              window.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    __requestIframe__: 1,
+                    type: 'ack',
+                    requestId: msg.requestId,
+                    path: msg.path,
+                    role: MessageRole.SERVER
+                  },
+                  origin
+                })
+              );
+              setTimeout(() => {
+                window.dispatchEvent(
+                  new MessageEvent('message', {
+                    data: {
+                      __requestIframe__: 1,
+                      type: 'response',
+                      requestId: msg.requestId,
+                      data: { result: 'success' },
+                      status: 200,
+                      statusText: 'OK',
+                      role: MessageRole.SERVER
+                    },
+                    origin
+                  })
+                );
+              }, 10);
+            }, 10);
           }
         })
       };
@@ -274,10 +316,9 @@ describe('debug', () => {
       const client = requestIframeClient(iframe);
       setupClientDebugInterceptors(client);
 
-      await client.send('test', undefined, { ackTimeout: 1000 });
+      await client.send('test', undefined, { ackTimeout: 1000, timeout: 5000 });
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Client] Received ACK'),
         expect.objectContaining({
           requestId: expect.any(String)
@@ -285,7 +326,7 @@ describe('debug', () => {
       );
 
       cleanupIframe(iframe);
-    });
+    }, 10000);
   });
 
   describe('setupServerDebugListeners', () => {
@@ -317,7 +358,8 @@ describe('debug', () => {
             requestId: 'req123',
             path: 'test',
             body: { param: 'value' },
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockContentWindow as any
@@ -327,7 +369,6 @@ describe('debug', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Server] Received Request'),
         expect.objectContaining({
           path: 'test',
@@ -336,7 +377,6 @@ describe('debug', () => {
       );
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Server] Sending Response'),
         expect.objectContaining({
           status: 200
@@ -374,7 +414,8 @@ describe('debug', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockContentWindow as any
@@ -384,7 +425,6 @@ describe('debug', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Server] Setting Status Code'),
         expect.objectContaining({
           statusCode: 404
@@ -423,7 +463,8 @@ describe('debug', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockContentWindow as any
@@ -433,7 +474,6 @@ describe('debug', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Server] Setting Header'),
         expect.objectContaining({
           header: 'X-Custom',
@@ -475,7 +515,8 @@ describe('debug', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockContentWindow as any
@@ -485,7 +526,6 @@ describe('debug', () => {
       await new Promise(resolve => setTimeout(resolve, 200));
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Server] Sending File'),
         expect.objectContaining({
           fileName: 'test.txt',
@@ -524,7 +564,8 @@ describe('debug', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockContentWindow as any
@@ -534,7 +575,6 @@ describe('debug', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(console.info).toHaveBeenCalledWith(
-        expect.stringContaining('[request-iframe]'),
         expect.stringContaining('[Server] Sending JSON Response'),
         expect.objectContaining({
           status: 200

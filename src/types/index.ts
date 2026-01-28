@@ -36,6 +36,12 @@ export interface RequestOptions extends RequestDefaults {
   headers?: HeadersConfig;
   /** Request cookies */
   cookies?: Record<string, string>;
+  /** 
+   * Target server instance ID
+   * If specified, the request will only be handled by the server instance with this ID.
+   * This allows clients to target a specific server instance when multiple instances exist.
+   */
+  targetId?: string;
 }
 
 /**
@@ -66,12 +72,6 @@ export interface Response<T = any> {
   requestId: string;
   /** Response headers (Set-Cookie is a string array) */
   headers?: Record<string, string | string[]>;
-  /** File data (if response is a file) */
-  fileData?: {
-    content: string; // base64 encoded content
-    mimeType?: string;
-    fileName?: string;
-  };
   /** Stream data (if response is a stream) */
   stream?: import('../stream').IIframeReadableStream<T>;
 }
@@ -168,12 +168,6 @@ export interface PostMessageData {
   cookies?: Record<string, string>;
   /** Response data */
   data?: any;
-  /** File data (base64 encoded, used for sendFile) */
-  fileData?: {
-    content: string; // base64 encoded content
-    mimeType?: string;
-    fileName?: string;
-  };
   /** Error information */
   error?: {
     message: string;
@@ -193,10 +187,17 @@ export interface PostMessageData {
    */
   role?: MessageRoleValue;
   /** 
-   * ID of the instance that sent this message
-   * Used to identify which client/server instance generated the message
+   * ID of the instance that created this message
+   * Used to identify which client/server instance created the message
    */
-  senderId?: string;
+  creatorId?: string;
+  /**
+   * ID of the target instance that should handle this message
+   * - For requests: ID of the target server instance (if specified, only that server will process it)
+   * - For responses/acks: ID of the target client instance (usually the creatorId of the original request)
+   * Used to ensure messages are routed to the correct instance and avoid message confusion
+   */
+  targetId?: string;
 }
 
 /**
@@ -484,6 +485,13 @@ export interface RequestIframeServerOptions extends Pick<RequestDefaults, 'ackTi
    * If configured, automatically adds a unified prefix to the path of all messages (to avoid conflicts between different businesses), and only processes framework messages with the same secretKey.
    */
   secretKey?: string;
+  /**
+   * Custom server instance ID.
+   * If specified, the server will use this ID instead of generating a random one.
+   * Servers with the same id (and secretKey) will be cached and reused (singleton pattern).
+   * This allows clients to target a specific server instance by its ID.
+   */
+  id?: string;
   /**
    * Whether to enable trace mode.
    * If true, logs will be printed at various points such as before and after requests, server receive/respond, etc.

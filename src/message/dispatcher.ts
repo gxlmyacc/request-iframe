@@ -256,12 +256,12 @@ export class MessageDispatcher {
    * @param targetOrigin target origin (defaults to '*')
    */
   public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): void {
-    // Automatically set role and senderId if not already set (for backward compatibility)
+    // Automatically set role and creatorId if not already set (for backward compatibility)
     if (message.role === undefined) {
       message.role = this.role;
     }
-    if (message.senderId === undefined && this.instanceId) {
-      message.senderId = this.instanceId;
+    if (message.creatorId === undefined && this.instanceId) {
+      message.creatorId = this.instanceId;
     }
     this.channel.send(target, message, targetOrigin);
   }
@@ -279,14 +279,14 @@ export class MessageDispatcher {
     targetOrigin: string,
     type: PostMessageData['type'],
     requestId: string,
-    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role' | 'senderId'>>
+    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role' | 'creatorId'>>
   ): void {
-    // Automatically set role and senderId based on dispatcher's role and instanceId
-    // Create message with role and senderId using createPostMessage directly
+    // Automatically set role and creatorId based on dispatcher's role and instanceId
+    // Create message with role and creatorId using createPostMessage directly
     const message = createPostMessage(type, requestId, {
       ...data,
       role: this.role,
-      senderId: this.instanceId
+      creatorId: this.instanceId
     } as any);
     this.channel.send(target, message, targetOrigin);
   }

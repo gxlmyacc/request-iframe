@@ -34,6 +34,13 @@ Communicate with iframes like sending HTTP requests! A cross-origin iframe commu
   - [Trace Mode](#trace-mode)
   - [Internationalization](#internationalization)
 - [API Reference](#api-reference)
+- [React Hooks](#react-hooks)
+  - [useClient](#useclienttargetfnorref-options-deps)
+  - [useServer](#useserveroptions-deps)
+  - [useServerHandler](#useserverhandlerserver-path-handler-deps)
+  - [useServerHandlerMap](#useserverhandlermapserver-map-deps)
+  - [Complete Example](#complete-example)
+  - [Best Practices](#best-practices)
 - [Error Handling](#error-handling)
 - [FAQ](#faq)
 - [Development](#development)
@@ -755,16 +762,11 @@ Send a request.
 
 ```typescript
 interface Response<T = any> {
-  data: T;                    // Response data
+  data: T;                    // Response data (File/Blob for auto-resolved file streams)
   status: number;             // Status code
   statusText: string;         // Status text
   requestId: string;          // Request ID
   headers?: Record<string, string | string[]>;  // Response headers (Set-Cookie is array)
-  fileData?: {                // File data (if any)
-    content: string;          // base64-encoded content
-    mimeType?: string;
-    fileName?: string;
-  };
   stream?: IIframeReadableStream<T>;  // Stream response (if any)
 }
 ```
@@ -837,6 +839,259 @@ server.use(['/a', '/b'], (req, res, next) => { ... });
 #### server.destroy()
 
 Destroy Server instance, remove all listeners.
+
+---
+
+## React Hooks
+
+request-iframe provides React hooks for easy integration in React applications. Import hooks from `request-iframe/react`:
+
+```typescript
+import { useClient, useServer, useServerHandler, useServerHandlerMap } from 'request-iframe/react';
+```
+
+### useClient(targetFnOrRef, options?, deps?)
+
+React hook for using request-iframe client.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `targetFnOrRef` | `(() => HTMLIFrameElement \| Window \| null) \| RefObject<HTMLIFrameElement \| Window>` | Function that returns iframe element or Window object, or a React ref object |
+| `options` | `RequestIframeClientOptions` | Client options (optional) |
+| `deps` | `readonly unknown[]` | Dependency array (optional, for re-creating client when dependencies change) |
+
+**Returns:** `RequestIframeClient | null`
+
+**Example:**
+
+```tsx
+import { useClient } from 'request-iframe/react';
+import { useRef } from 'react';
+
+const MyComponent = () => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const client = useClient(iframeRef, { secretKey: 'my-app' });
+
+  const handleClick = async () => {
+    if (client) {
+      const response = await client.send('/api/data', { id: 1 });
+      console.log(response.data);
+    }
+  };
+
+  return (
+    <div>
+      <iframe ref={iframeRef} src="/iframe.html" />
+      <button onClick={handleClick}>Send Request</button>
+    </div>
+  );
+};
+```
+
+**Using function instead of ref:**
+
+```tsx
+const MyComponent = () => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const client = useClient(() => iframeRef.current, { secretKey: 'my-app' });
+  // ...
+};
+```
+
+### useServer(options?, deps?)
+
+React hook for using request-iframe server.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `options` | `RequestIframeServerOptions` | Server options (optional) |
+| `deps` | `readonly unknown[]` | Dependency array (optional, for re-creating server when dependencies change) |
+
+**Returns:** `RequestIframeServer | null`
+
+**Example:**
+
+```tsx
+import { useServer } from 'request-iframe/react';
+
+const MyComponent = () => {
+  const server = useServer({ secretKey: 'my-app' });
+
+  useEffect(() => {
+    if (!server) return;
+
+    const off = server.on('/api/data', (req, res) => {
+      res.send({ data: 'Hello' });
+    });
+
+    return off; // Cleanup on unmount
+  }, [server]);
+
+  return <div>Server Component</div>;
+};
+```
+
+### useServerHandler(server, path, handler, deps?)
+
+React hook for registering a single server handler with automatic cleanup and closure handling.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `server` | `RequestIframeServer \| null` | Server instance (from `useServer`) |
+| `path` | `string` | Route path |
+| `handler` | `ServerHandler` | Handler function |
+| `deps` | `readonly unknown[]` | Dependency array (optional, for re-registering when dependencies change) |
+
+**Example:**
+
+```tsx
+import { useServer, useServerHandler } from 'request-iframe/react';
+import { useState } from 'react';
+
+const MyComponent = () => {
+  const server = useServer();
+  const [userId, setUserId] = useState(1);
+
+  // Handler automatically uses latest userId value
+  useServerHandler(server, '/api/user', (req, res) => {
+    res.send({ userId, data: 'Hello' });
+  }, [userId]); // Re-register when userId changes
+
+  return <div>Server Component</div>;
+};
+```
+
+**Key Features:**
+- Automatically handles closure issues - always uses latest values from dependencies
+- Automatically unregisters handler on unmount or when dependencies change
+- No need to manually manage handler registration/cleanup
+
+### useServerHandlerMap(server, map, deps?)
+
+React hook for registering multiple server handlers at once with automatic cleanup.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `server` | `RequestIframeServer \| null` | Server instance (from `useServer`) |
+| `map` | `Record<string, ServerHandler>` | Map of route paths and handler functions |
+| `deps` | `readonly unknown[]` | Dependency array (optional, for re-registering when dependencies change) |
+
+**Example:**
+
+```tsx
+import { useServer, useServerHandlerMap } from 'request-iframe/react';
+import { useState } from 'react';
+
+const MyComponent = () => {
+  const server = useServer();
+  const [userId, setUserId] = useState(1);
+
+  // Register multiple handlers at once
+  useServerHandlerMap(server, {
+    '/api/user': (req, res) => {
+      res.send({ userId, data: 'User data' });
+    },
+    '/api/posts': (req, res) => {
+      res.send({ userId, data: 'Posts data' });
+    }
+  }, [userId]); // Re-register all handlers when userId changes
+
+  return <div>Server Component</div>;
+};
+```
+
+**Key Features:**
+- Batch registration of multiple handlers
+- Automatically handles closure issues - always uses latest values from dependencies
+- Automatically unregisters all handlers on unmount or when dependencies change
+- Efficient - only re-registers when map keys change
+
+### Complete Example
+
+Here's a complete example showing how to use React hooks in a real application:
+
+```tsx
+import { useClient, useServer, useServerHandler } from 'request-iframe/react';
+import { useRef, useState } from 'react';
+
+// Parent Component (Client)
+const ParentComponent = () => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const client = useClient(iframeRef, { secretKey: 'my-app' });
+  const [data, setData] = useState(null);
+
+  const fetchData = async () => {
+    if (!client) return;
+    
+    try {
+      const response = await client.send('/api/data', { id: 1 });
+      setData(response.data);
+    } catch (error) {
+      console.error('Request failed:', error);
+    }
+  };
+
+  return (
+    <div>
+      <iframe ref={iframeRef} src="/iframe.html" />
+      <button onClick={fetchData}>Fetch Data</button>
+      {data && <pre>{JSON.stringify(data, null, 2)}</pre>}
+    </div>
+  );
+};
+
+// Iframe Component (Server)
+const IframeComponent = () => {
+  const server = useServer({ secretKey: 'my-app' });
+  const [userId, setUserId] = useState(1);
+
+  // Register handler with automatic cleanup
+  useServerHandler(server, '/api/data', async (req, res) => {
+    // Handler always uses latest userId value
+    const userData = await fetchUserData(userId);
+    res.send(userData);
+  }, [userId]);
+
+  return (
+    <div>
+      <p>User ID: {userId}</p>
+      <button onClick={() => setUserId(userId + 1)}>Increment</button>
+    </div>
+  );
+};
+```
+
+### Best Practices
+
+1. **Always check for null**: Client and server hooks may return `null` initially or when target is unavailable:
+   ```tsx
+   const client = useClient(iframeRef);
+   if (!client) return null; // Handle null case
+   ```
+
+2. **Use dependency arrays**: Pass dependencies to hooks to ensure handlers use latest values:
+   ```tsx
+   useServerHandler(server, '/api/data', (req, res) => {
+     res.send({ userId }); // Always uses latest userId
+   }, [userId]); // Re-register when userId changes
+   ```
+
+3. **Cleanup is automatic**: Hooks automatically clean up on unmount, but you can also manually unregister:
+   ```tsx
+   useEffect(() => {
+     if (!server) return;
+     const off = server.on('/api/data', handler);
+     return off; // Manual cleanup (optional, hooks do this automatically)
+   }, [server]);
+   ```
 
 ---
 

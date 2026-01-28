@@ -25,13 +25,12 @@ function cleanupIframe(iframe: HTMLIFrameElement): void {
  * Create a mock window object that can be used as MessageEvent source
  * This ensures the source is recognized as a Window object by the message channel
  */
-function createMockWindow(): Window {
-  const mockWindow = {
-    postMessage: jest.fn()
-  } as any;
-  // Ensure it's recognized as Window type
-  Object.setPrototypeOf(mockWindow, window);
-  return mockWindow as Window;
+function createMockWindow(): { postMessage: jest.Mock } & Window {
+  const mockPostMessage = jest.fn();
+  // Create a mock window that extends the real window prototype
+  const mockWindow = Object.create(window) as any;
+  mockWindow.postMessage = mockPostMessage;
+  return mockWindow;
 }
 
 describe('RequestIframeServer', () => {
@@ -138,13 +137,7 @@ describe('RequestIframeServer', () => {
       
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
-      const mockContentWindow = {
-        postMessage: jest.fn()
-      };
-      Object.defineProperty(iframe, 'contentWindow', {
-        value: mockContentWindow,
-        writable: true
-      });
+      const mockWindow = createMockWindow();
 
       window.dispatchEvent(
         new MessageEvent('message', {
@@ -158,7 +151,7 @@ describe('RequestIframeServer', () => {
             role: MessageRole.CLIENT
           },
           origin,
-          source: mockContentWindow as any
+          source: mockWindow
         })
       );
 
@@ -177,13 +170,7 @@ describe('RequestIframeServer', () => {
       
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
-      const mockContentWindow = {
-        postMessage: jest.fn()
-      };
-      Object.defineProperty(iframe, 'contentWindow', {
-        value: mockContentWindow,
-        writable: true
-      });
+      const mockWindow = createMockWindow();
 
       window.dispatchEvent(
         new MessageEvent('message', {
@@ -196,7 +183,7 @@ describe('RequestIframeServer', () => {
             role: MessageRole.CLIENT
           },
           origin,
-          source: mockContentWindow as any
+          source: mockWindow
         })
       );
 
@@ -440,7 +427,13 @@ describe('RequestIframeServer', () => {
       const server = requestIframeServer();
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
-      const mockWindow = createMockWindow();
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
 
       server.on('test', () => {
         throw new Error('Handler error');
@@ -454,24 +447,24 @@ describe('RequestIframeServer', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
-          source: mockWindow
+          source: mockContentWindow as any
         })
       );
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 150));
 
-      const errorCall = (mockWindow.postMessage as jest.Mock).mock.calls.find(
-        (call: any[]) => call[0]?.type === 'error' && call[0]?.requestId === 'req123'
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          requestId: 'req123',
+          status: HttpStatus.INTERNAL_SERVER_ERROR
+        }),
+        origin
       );
-      expect(errorCall).toBeDefined();
-      expect(errorCall[0]).toMatchObject({
-        type: 'error',
-        requestId: 'req123',
-        status: HttpStatus.INTERNAL_SERVER_ERROR
-      });
 
       server.destroy();
       cleanupIframe(iframe);
@@ -481,7 +474,13 @@ describe('RequestIframeServer', () => {
       const server = requestIframeServer();
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
-      const mockWindow = createMockWindow();
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
 
       server.on('test', async () => {
         throw new Error('Async handler error');
@@ -495,24 +494,24 @@ describe('RequestIframeServer', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
-          source: mockWindow
+          source: mockContentWindow as any
         })
       );
 
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise(resolve => setTimeout(resolve, 200));
 
-      const errorCall = (mockWindow.postMessage as jest.Mock).mock.calls.find(
-        (call: any[]) => call[0]?.type === 'error' && call[0]?.requestId === 'req123'
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          requestId: 'req123',
+          status: HttpStatus.INTERNAL_SERVER_ERROR
+        }),
+        origin
       );
-      expect(errorCall).toBeDefined();
-      expect(errorCall[0]).toMatchObject({
-        type: 'error',
-        requestId: 'req123',
-        status: HttpStatus.INTERNAL_SERVER_ERROR
-      });
 
       server.destroy();
       cleanupIframe(iframe);
@@ -545,19 +544,23 @@ describe('RequestIframeServer', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockContentWindow as any
         })
       );
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 150));
 
-      const asyncCall = mockContentWindow.postMessage.mock.calls.find(
-        (call: any[]) => call[0]?.type === 'async'
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'async',
+          requestId: 'req123'
+        }),
+        origin
       );
-      expect(asyncCall).toBeDefined();
 
       server.destroy();
       cleanupIframe(iframe);
@@ -567,7 +570,13 @@ describe('RequestIframeServer', () => {
       const server = requestIframeServer();
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
-      const mockWindow = createMockWindow();
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
 
       server.on('test', async () => {
         // No response sent
@@ -581,19 +590,23 @@ describe('RequestIframeServer', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
-          source: mockWindow
+          source: mockContentWindow as any
         })
       );
 
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise(resolve => setTimeout(resolve, 200));
 
-      const errorCall = (mockWindow.postMessage as jest.Mock).mock.calls.find(
-        (call: any[]) => call[0]?.type === 'error' && call[0]?.requestId === 'req123'
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          requestId: 'req123'
+        }),
+        origin
       );
-      expect(errorCall).toBeDefined();
 
       server.destroy();
       cleanupIframe(iframe);
@@ -666,14 +679,15 @@ describe('RequestIframeServer', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT
+            role: MessageRole.CLIENT,
+            targetId: server.id
           },
           origin,
           source: mockWindow
         })
       );
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 150));
 
       // Send received acknowledgment
       window.dispatchEvent(
@@ -689,6 +703,8 @@ describe('RequestIframeServer', () => {
           source: mockWindow
         })
       );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       const received = await Promise.race([
         ackPromise,

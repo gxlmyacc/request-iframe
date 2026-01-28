@@ -23,6 +23,9 @@ export class ServerResponseImpl implements ServerResponse {
   private readonly targetWindow: Window;
   private readonly targetOrigin: string;
   private readonly channel?: MessageChannel;
+  /** Target client ID (usually the creatorId of the original request) */
+  private readonly targetId?: string;
+  /** Server instance ID (for creatorId in responses) */
   private readonly serverId?: string;
   private onAckCallback?: AckCallback;
   public _sent = false;
@@ -34,7 +37,8 @@ export class ServerResponseImpl implements ServerResponse {
     targetWindow: Window,
     targetOrigin: string,
     channel?: MessageChannel,
-    serverId?: string
+    serverId?: string,
+    targetId?: string
   ) {
     this.requestId = requestId;
     this.path = path;
@@ -43,6 +47,7 @@ export class ServerResponseImpl implements ServerResponse {
     this.targetOrigin = targetOrigin;
     this.channel = channel;
     this.serverId = serverId;
+    this.targetId = targetId;
   }
 
   /**
@@ -91,7 +96,8 @@ export class ServerResponseImpl implements ServerResponse {
           headers: this.headers,
           requireAck: false,
           role: MessageRole.SERVER,
-          senderId: this.serverId
+          creatorId: this.serverId,
+          targetId: this.targetId
         })
       );
       return Promise.resolve(true);
@@ -111,7 +117,8 @@ export class ServerResponseImpl implements ServerResponse {
           headers: this.headers,
           requireAck: true,
           role: MessageRole.SERVER,
-          senderId: this.serverId
+          creatorId: this.serverId,
+          targetId: this.targetId
         })
       );
     });
@@ -192,7 +199,8 @@ export class ServerResponseImpl implements ServerResponse {
       targetOrigin: this.targetOrigin,
       secretKey: this.secretKey,
       channel: this.channel,
-      serverId: this.serverId
+      serverId: this.serverId,
+      targetId: this.targetId
     });
 
     // Start stream transmission

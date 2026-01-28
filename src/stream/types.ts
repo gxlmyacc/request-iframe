@@ -87,10 +87,12 @@ export interface StreamBindContext {
   secretKey?: string;
   /** MessageChannel for sending messages (optional, uses direct postMessage if not provided) */
   channel?: MessageChannel;
-  /** Server instance ID (for server-side streams) */
+  /** Server instance ID (for server-side streams, used as creatorId) */
   serverId?: string;
-  /** Client instance ID (for client-side streams) */
+  /** Client instance ID (for client-side streams, used as creatorId) */
   clientId?: string;
+  /** Target instance ID (for routing messages to the correct instance) */
+  targetId?: string;
 }
 
 /**
@@ -156,6 +158,8 @@ export interface IIframeFileReadableStream extends IIframeReadableStream<Uint8Ar
   readonly size?: number;
   /** Read as Blob */
   readAsBlob(): Promise<Blob>;
+  /** Read as File */
+  readAsFile(fileName?: string): Promise<File>;
   /** Read as ArrayBuffer */
   readAsArrayBuffer(): Promise<ArrayBuffer>;
   /** Read as Data URL */

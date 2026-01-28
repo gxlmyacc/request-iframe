@@ -235,7 +235,7 @@ export class IframeReadableStream<T = any> implements IIframeReadableStream<T> {
         reason
       },
       role: MessageRole.CLIENT,
-      senderId: (this.messageHandler as any).id
+      creatorId: (this.messageHandler as any).id
     });
     this.messageHandler.postMessage(message);
     
