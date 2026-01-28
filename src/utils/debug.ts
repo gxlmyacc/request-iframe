@@ -9,15 +9,20 @@ const DEBUG_PREFIX = '[request-iframe]';
 
 /**
  * Format log output
+ * - Prefix: bold
+ * - info: message text in blue
  */
 function log(level: 'info' | 'warn' | 'error', message: string, data?: unknown): void {
   const timestamp = new Date().toISOString();
   const prefix = `${DEBUG_PREFIX} [${timestamp}] [${level.toUpperCase()}]`;
-  
+
+  const prefixStyle = 'font-weight:bold';
+  const messageStyle = level === 'info' ? 'color: #1976d2' : '';
+
   if (data !== undefined) {
-    console[level](`${prefix} ${message}`, data);
+    console[level](`%c${prefix}%c ${message}`, prefixStyle, messageStyle, data);
   } else {
-    console[level](`${prefix} ${message}`);
+    console[level](`%c${prefix}%c ${message}`, prefixStyle, messageStyle);
   }
 }
 

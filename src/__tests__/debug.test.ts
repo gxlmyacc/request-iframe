@@ -101,6 +101,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Client] Request Start'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           path: 'test',
           body: { param: 'value' }
@@ -109,6 +111,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Client] Request Success'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           requestId: expect.any(String),
           status: 200
@@ -144,6 +148,8 @@ describe('debug', () => {
 
       expect(console.error).toHaveBeenCalledWith(
         expect.stringContaining('[Client] Request Failed'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           code: expect.any(String)
         })
@@ -258,6 +264,8 @@ describe('debug', () => {
       
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Client] Request Success (File)'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           fileData: expect.objectContaining({
             fileName: 'test.txt'
@@ -320,6 +328,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Client] Received ACK'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           requestId: expect.any(String)
         })
@@ -370,6 +380,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Server] Received Request'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           path: 'test',
           body: { param: 'value' }
@@ -378,6 +390,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Server] Sending Response'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           status: 200
         })
@@ -426,6 +440,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Server] Setting Status Code'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           statusCode: 404
         })
@@ -475,6 +491,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Server] Setting Header'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           header: 'X-Custom',
           value: 'value'
@@ -527,6 +545,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Server] Sending File'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           fileName: 'test.txt',
           mimeType: 'text/plain'
@@ -576,6 +596,8 @@ describe('debug', () => {
 
       expect(console.info).toHaveBeenCalledWith(
         expect.stringContaining('[Server] Sending JSON Response'),
+        expect.any(String),
+        expect.any(String),
         expect.objectContaining({
           status: 200
         })
