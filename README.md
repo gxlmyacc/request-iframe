@@ -143,7 +143,8 @@ In micro-frontend architecture, the main application needs to communicate with c
 const client = requestIframeClient(iframe, { secretKey: 'main-app' });
 
 // Get user info from child application
-const userInfo = await client.send('/api/user/info', {});
+const userInfoResponse = await client.send('/api/user/info', {});
+console.log(userInfoResponse.data); // User info data
 
 // Notify child application to refresh data
 await client.send('/api/data/refresh', { timestamp: Date.now() });
@@ -187,7 +188,8 @@ server.on('/api/data', async (req, res) => {
 
 // Parent page (cross-origin)
 const client = requestIframeClient(iframe, { secretKey: 'data-api' });
-const data = await client.send('/api/data', {}); // Successfully fetch cross-origin data
+const response = await client.send('/api/data', {});
+const data = response.data; // Successfully fetch cross-origin data
 ```
 
 ### File Preview and Download
@@ -209,8 +211,8 @@ server.on('/api/processFile', async (req, res) => {
 
 // Parent page: download file
 const response = await client.send('/api/processFile', { fileId: '123' });
-if (response.fileData) {
-  downloadFile(response.fileData);
+if (response.data instanceof File || response.data instanceof Blob) {
+  downloadFile(response.data);
 }
 ```
 
@@ -478,10 +480,12 @@ server.on('/api/logout', (req, res) => {
 await client.send('/api/login', { username: 'tom', password: '123' });
 
 // Client side: Subsequent request to /api/getUserInfo (automatically carries authToken and userId)
-const userInfo = await client.send('/api/getUserInfo', {});
+const userInfoResponse = await client.send('/api/getUserInfo', {});
+const userInfo = userInfoResponse.data;
 
 // Client side: Request root path (only carries userId, because authToken's path is /api)
-const rootData = await client.send('/other', {});
+const rootResponse = await client.send('/other', {});
+const rootData = rootResponse.data;
 ```
 
 #### Client Cookie Management API
@@ -556,19 +560,17 @@ server.on('/api/download', async (req, res) => {
 
 // Client side: Receive
 const response = await client.send('/api/download', {});
-if (response.fileData) {
-  const { content, mimeType, fileName } = response.fileData;
+if (response.data instanceof File || response.data instanceof Blob) {
+  const file = response.data instanceof File ? response.data : null;
+  const fileName = file?.name || 'download';
   
-  // content is base64-encoded string
-  const binaryString = atob(content);
-  const blob = new Blob([binaryString], { type: mimeType });
-  
-  // Download file
-  const url = URL.createObjectURL(blob);
+  // Download file directly using File/Blob
+  const url = URL.createObjectURL(response.data);
   const a = document.createElement('a');
   a.href = url;
-  a.download = fileName || 'download';
+  a.download = fileName;
   a.click();
+  URL.revokeObjectURL(url);
 }
 ```
 

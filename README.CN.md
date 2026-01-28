@@ -252,7 +252,8 @@ client.send('/api/getData', data, {
 const client = requestIframeClient(iframe, { secretKey: 'main-app' });
 
 // 获取子应用的用户信息
-const userInfo = await client.send('/api/user/info', {});
+const userInfoResponse = await client.send('/api/user/info', {});
+console.log(userInfoResponse.data); // 用户信息数据
 
 // 通知子应用更新数据
 await client.send('/api/data/refresh', { timestamp: Date.now() });
@@ -296,7 +297,8 @@ server.on('/api/data', async (req, res) => {
 
 // 父页面（跨域）
 const client = requestIframeClient(iframe, { secretKey: 'data-api' });
-const data = await client.send('/api/data', {}); // 成功获取跨域数据
+const response = await client.send('/api/data', {});
+const data = response.data; // 成功获取跨域数据
 ```
 
 ### 文件预览和下载
@@ -318,8 +320,8 @@ server.on('/api/processFile', async (req, res) => {
 
 // 父页面：下载文件
 const response = await client.send('/api/processFile', { fileId: '123' });
-if (response.fileData) {
-  downloadFile(response.fileData);
+if (response.data instanceof File || response.data instanceof Blob) {
+  downloadFile(response.data);
 }
 ```
 
@@ -505,10 +507,12 @@ server.on('/api/logout', (req, res) => {
 await client.send('/api/login', { username: 'tom', password: '123' });
 
 // Client 端：后续请求 /api/getUserInfo（自动携带 authToken 和 userId）
-const userInfo = await client.send('/api/getUserInfo', {});
+const userInfoResponse = await client.send('/api/getUserInfo', {});
+const userInfo = userInfoResponse.data;
 
 // Client 端：请求根路径（只携带 userId，因为 authToken 的 path 是 /api）
-const rootData = await client.send('/other', {});
+const rootResponse = await client.send('/other', {});
+const rootData = rootResponse.data;
 ```
 
 #### Client Cookie 管理 API
@@ -583,19 +587,17 @@ server.on('/api/download', async (req, res) => {
 
 // Client 端接收
 const response = await client.send('/api/download', {});
-if (response.fileData) {
-  const { content, mimeType, fileName } = response.fileData;
+if (response.data instanceof File || response.data instanceof Blob) {
+  const file = response.data instanceof File ? response.data : null;
+  const fileName = file?.name || 'download';
   
-  // content 是 base64 编码的字符串
-  const binaryString = atob(content);
-  const blob = new Blob([binaryString], { type: mimeType });
-  
-  // 下载文件
-  const url = URL.createObjectURL(blob);
+  // 直接使用 File/Blob 下载文件
+  const url = URL.createObjectURL(response.data);
   const a = document.createElement('a');
   a.href = url;
-  a.download = fileName || 'download';
+  a.download = fileName;
   a.click();
+  URL.revokeObjectURL(url);
 }
 ```
 
