@@ -274,7 +274,7 @@ await client.send('/config', {
 });
 
 // 监听组件事件（通过反向通信）
-const server = requestIframeServer({ secretKey: 'widget-events' });
+const server = requestIframeServer({ secretKey: 'widget' });
 server.on('/event', (req, res) => {
   console.log('组件事件:', req.body);
   res.send({ received: true });

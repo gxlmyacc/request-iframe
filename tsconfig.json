@@ -15,5 +15,11 @@
     "moduleResolution": "node"
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "library", "react", "**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "library",
+    "react",
+    "react/library",
+    "**/*.test.ts"
+  ]
 }

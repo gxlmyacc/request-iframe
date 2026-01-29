@@ -1,5 +1,5 @@
 module.exports = {
-  "ignorePatterns": [".eslintrc.js", "jest.config.js", "**/*.test.ts"],
+  "ignorePatterns": [".eslintrc.js", "jest.config.js", "**/*.test.ts", "scripts/**"],
   "parser": "@typescript-eslint/parser",
   "parserOptions": {
     "ecmaVersion": 2020,

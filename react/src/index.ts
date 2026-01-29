@@ -287,6 +287,10 @@ export function useServerHandlerMap(
     return Object.keys(map).sort();
   }, [map]);
 
+  const keysStr = useMemo(() => {
+    return keys.join(',');
+  }, [keys]);
+
   const mapWrapper = useMemo(() => {
     return keys.reduce((acc, key) => {
       acc[key] = function (req: any, res: any) {
@@ -294,7 +298,7 @@ export function useServerHandlerMap(
       };
       return acc;
     }, {} as Record<string, ServerHandler>);
-  }, [keys]);
+  }, [keysStr]);
 
   useEffect(() => {
     if (!server) {

@@ -165,7 +165,7 @@ await client.send('/config', {
 });
 
 // Listen to component events (via reverse communication)
-const server = requestIframeServer({ secretKey: 'widget-events' });
+const server = requestIframeServer({ secretKey: 'widget' });
 server.on('/event', (req, res) => {
   console.log('Component event:', req.body);
   res.send({ received: true });
