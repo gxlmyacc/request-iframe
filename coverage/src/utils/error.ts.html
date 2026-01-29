@@ -3,7 +3,7 @@
 <html lang="en">
 
 <head>
-    <title>Code coverage report for src/core/request.ts</title>
+    <title>Code coverage report for src/utils/error.ts</title>
     <meta charset="utf-8" />
     <link rel="stylesheet" href="../../prettify.css" />
     <link rel="stylesheet" href="../../base.css" />
@@ -19,20 +19,20 @@
 <body>
 <div class='wrapper'>
     <div class='pad1'>
-        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/core</a> request.ts</h1>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/utils</a> error.ts</h1>
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>13/13</span>
+                <span class='fraction'>9/9</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">62.5% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>5/8</span>
+                <span class='fraction'>1/1</span>
             </div>
         
             
@@ -46,7 +46,7 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>13/13</span>
+                <span class='fraction'>9/9</span>
             </div>
         
             
@@ -97,24 +97,13 @@
 <a name='L32'></a><a href='#L32'>32</a>
 <a name='L33'></a><a href='#L33'>33</a>
 <a name='L34'></a><a href='#L34'>34</a>
-<a name='L35'></a><a href='#L35'>35</a>
-<a name='L36'></a><a href='#L36'>36</a>
-<a name='L37'></a><a href='#L37'>37</a>
-<a name='L38'></a><a href='#L38'>38</a>
-<a name='L39'></a><a href='#L39'>39</a>
-<a name='L40'></a><a href='#L40'>40</a>
-<a name='L41'></a><a href='#L41'>41</a>
-<a name='L42'></a><a href='#L42'>42</a>
-<a name='L43'></a><a href='#L43'>43</a>
-<a name='L44'></a><a href='#L44'>44</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L35'></a><a href='#L35'>35</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">8x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -129,67 +118,51 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">12x</span>
-<span class="cline-any cline-yes">4x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-yes">60x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { 
-  ServerRequest, ServerResponse, PostMessageData
-} from '../types';
-import { MessageContext } from '../message';
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { ErrorResponse } from '../types';
 &nbsp;
 /**
- * ServerRequest implementation
+ * Custom Error class for request-iframe errors
+ * Extends native Error with additional error response fields
  */
-export class ServerRequestImpl implements ServerRequest {
-  public body: any;
-  public stream?: ServerRequest['stream'];
-  public headers: Record&lt;string, string&gt;;
-  public cookies: Record&lt;string, string&gt;;
-  public path: string;
-  public params: Record&lt;string, string&gt;;
-  public requestId: string;
-  public origin: string;
-  public source: Window;
-  public res: ServerResponse;
+export class RequestIframeError extends Error implements ErrorResponse {
+  /** Error code */
+  public readonly code?: string;
+  /** Request configuration */
+  public readonly config?: import('../types').RequestConfig;
+  /** Response data (if available) */
+  public readonly response?: {
+    data: any;
+    status: number;
+    statusText: string;
+  };
+  /** Request ID */
+  public readonly requestId?: string;
 &nbsp;
-  constructor(
-    data: PostMessageData,
-    context: MessageContext,
-    response: ServerResponse,
-    params: Record&lt;string, string&gt; = <span class="branch-0 cbranch-no" title="branch not covered" >{}</span>
-  ) {
-    this.body = data.body;
-    // headers may contain array values (e.g., Set-Cookie), simplified to string here
-    this.headers = {};
-    if (data.headers) {
-      for (const [key, value] of Object.entries(data.headers)) {
-        this.headers[key] = Array.isArray(value) ? <span class="branch-0 cbranch-no" title="branch not covered" >value.join(', ') </span>: value;
-      }
+  constructor(error: ErrorResponse) {
+    super(error.message);
+    this.name = 'RequestIframeError';
+    this.code = error.code;
+    this.config = error.config;
+    this.response = error.response;
+    this.requestId = error.requestId;
+    
+    // Maintain proper stack trace for where our error was thrown (only available on V8)
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, RequestIframeError);
     }
-    this.cookies = data.cookies || {};
-    this.path = data.path || <span class="branch-1 cbranch-no" title="branch not covered" >'';</span>
-    this.params = params;
-    this.requestId = data.requestId;
-    this.origin = context.origin;
-    this.source = context.source!;
-    this.res = response;
   }
 }
 &nbsp;</pre></td></tr></table></pre>
@@ -199,7 +172,7 @@ export class ServerRequestImpl implements ServerRequest {
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-01-29T02:06:06.679Z
+                at 2026-01-29T02:06:06.730Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

@@ -7,7 +7,8 @@ import {
   createSetCookie,
   createClearCookie,
   matchCookiePath,
-  CookieStore
+  CookieStore,
+  isWindowAvailable
 } from '../utils';
 import {
   validateProtocolVersion,
@@ -428,6 +429,45 @@ describe('utils', () => {
         expect(matchPath('api', '/api')).toBe(true);
         expect(matchPath('/api', 'api')).toBe(true);
       });
+    });
+  });
+
+  describe('isWindowAvailable', () => {
+    it('should return true for valid window', () => {
+      expect(isWindowAvailable(window)).toBe(true);
+    });
+
+    it('should return false for null', () => {
+      expect(isWindowAvailable(null)).toBe(false);
+    });
+
+    it('should return false for undefined', () => {
+      expect(isWindowAvailable(undefined)).toBe(false);
+    });
+
+    it('should return false for closed window (window.open)', () => {
+      const mockWindow = {
+        closed: true,
+        document: {},
+        postMessage: jest.fn()
+      } as any;
+      expect(isWindowAvailable(mockWindow)).toBe(false);
+    });
+
+    it('should return true for open window (window.open)', () => {
+      const mockWindow = {
+        closed: false,
+        document: {},
+        postMessage: jest.fn()
+      } as any;
+      expect(isWindowAvailable(mockWindow)).toBe(true);
+    });
+
+    it('should return false when postMessage is missing', () => {
+      const mockWindow = {
+        closed: false
+      } as any;
+      expect(isWindowAvailable(mockWindow)).toBe(false);
     });
   });
 });

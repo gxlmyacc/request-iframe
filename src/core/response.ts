@@ -1,6 +1,6 @@
 import { ServerResponse, CookieOptions, SendOptions, SendFileOptions } from '../types';
 import { createPostMessage, createSetCookie, createClearCookie, detectContentType, blobToBase64 } from '../utils';
-import { MessageType, HttpStatus, HttpHeader, getStatusText, MessageRole } from '../constants';
+import { MessageType, HttpStatus, HttpHeader, getStatusText, MessageRole, ErrorCode } from '../constants';
 import { IframeWritableStream, IframeFileWritableStream, isIframeWritableStream } from '../stream';
 import { MessageChannel } from '../message';
 
@@ -54,6 +54,7 @@ export class ServerResponseImpl implements ServerResponse {
    * Send message via channel
    */
   private sendMessage(message: any): void {
+    // Window check is handled in MessageDispatcher (via channel.send -> dispatcher.send)
     this.channel.send(this.targetWindow, message, this.targetOrigin);
   }
 
@@ -110,44 +111,61 @@ export class ServerResponseImpl implements ServerResponse {
 
     const requireAck = options?.requireAck ?? false;
 
-    // If acknowledgment not required, send directly and return true
-    if (!requireAck) {
-      this.sendMessage(
-        createPostMessage(MessageType.RESPONSE, this.requestId, {
-          path: this.path,
-          secretKey: this.secretKey,
-          data,
-          status: this.statusCode,
-          statusText: getStatusText(this.statusCode),
-          headers: this.headers,
-          requireAck: false,
-          role: MessageRole.SERVER,
-          creatorId: this.serverId,
-          targetId: this.targetId
-        })
-      );
-      return Promise.resolve(true);
+    try {
+      // If acknowledgment not required, send directly and return true
+      if (!requireAck) {
+        this.sendMessage(
+          createPostMessage(MessageType.RESPONSE, this.requestId, {
+            path: this.path,
+            secretKey: this.secretKey,
+            data,
+            status: this.statusCode,
+            statusText: getStatusText(this.statusCode),
+            headers: this.headers,
+            requireAck: false,
+            role: MessageRole.SERVER,
+            creatorId: this.serverId,
+            targetId: this.targetId
+          })
+        );
+        return Promise.resolve(true);
+      }
+
+      // Acknowledgment required, wait for client response
+      return new Promise((resolve, reject) => {
+        try {
+          this._setOnAckCallback(resolve);
+
+          this.sendMessage(
+            createPostMessage(MessageType.RESPONSE, this.requestId, {
+              path: this.path,
+              secretKey: this.secretKey,
+              data,
+              status: this.statusCode,
+              statusText: getStatusText(this.statusCode),
+              headers: this.headers,
+              requireAck: true,
+              role: MessageRole.SERVER,
+              creatorId: this.serverId,
+              targetId: this.targetId
+            })
+          );
+        } catch (error: any) {
+          // If window is closed, reject immediately
+          if (error?.code === ErrorCode.TARGET_WINDOW_CLOSED) {
+            reject(error);
+          } else {
+            throw error;
+          }
+        }
+      });
+    } catch (error: any) {
+      // If window is closed, return rejected promise
+      if (error?.code === ErrorCode.TARGET_WINDOW_CLOSED) {
+        return Promise.reject(error);
+      }
+      throw error;
     }
-
-    // Acknowledgment required, wait for client response
-    return new Promise((resolve) => {
-      this._setOnAckCallback(resolve);
-
-      this.sendMessage(
-        createPostMessage(MessageType.RESPONSE, this.requestId, {
-          path: this.path,
-          secretKey: this.secretKey,
-          data,
-          status: this.statusCode,
-          statusText: getStatusText(this.statusCode),
-          headers: this.headers,
-          requireAck: true,
-          role: MessageRole.SERVER,
-          creatorId: this.serverId,
-          targetId: this.targetId
-        })
-      );
-    });
   }
 
   /**
@@ -255,6 +273,8 @@ export class ServerResponseImpl implements ServerResponse {
   public async sendStream(stream: IframeWritableStream): Promise<void> {
     if (this._sent) return;
     this._sent = true;
+
+    // Window check is handled in MessageDispatcher when stream sends messages
 
     // Bind stream to request context
     stream._bind({

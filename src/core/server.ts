@@ -252,6 +252,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
               try {
                 const result = handlerFn(req, res);
                 if (isPromise(result)) {
+                  // Window check is handled in MessageDispatcher
                   this.dispatcher.sendMessage(
                     targetWindow,
                     targetOrigin,
@@ -294,6 +295,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       try {
         const result = handlerFn(req, res);
         if (isPromise(result)) {
+          // Window check is handled in MessageDispatcher
           this.dispatcher.sendMessage(
             targetWindow,
             targetOrigin,
@@ -330,6 +332,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     if (!context.source) return;
 
     // Send protocol version incompatibility error
+    // Window check is handled in MessageDispatcher
     this.dispatcher.sendMessage(
       context.source,
       context.origin,
@@ -352,6 +355,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
    */
   private handlePing(data: PostMessageData, context: MessageContext): void {
     if (!context.source) return;
+    
+    // Window check is handled in MessageDispatcher
     this.dispatcher.sendMessage(
       context.source,
       context.origin,
@@ -397,6 +402,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
         ? HttpStatus.INTERNAL_SERVER_ERROR 
         : res.statusCode;
       
+      // Window check is handled in MessageDispatcher
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -499,6 +505,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       
       // Send METHOD_NOT_FOUND error
       // Use request's creatorId as targetId to route back to the correct client
+      // Window check is handled in MessageDispatcher
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -522,6 +529,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
 
     // Send ACK immediately via dispatcher
     // Use request's creatorId as targetId to route back to the correct client
+    // Window check is handled in MessageDispatcher
     this.dispatcher.sendMessage(
       targetWindow,
       targetOrigin,
@@ -587,6 +595,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
 
         if (isPromise(result)) {
           // Async task
+          // Window check is handled in MessageDispatcher
           // Use request's creatorId as targetId to route back to the correct client
           this.dispatcher.sendMessage(
             targetWindow,
@@ -598,7 +607,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
               targetId: data.creatorId
             }
           );
-  
+
           result.then(
             this.handleRequestResult.bind(this, res, targetWindow, targetOrigin, data)
           ).catch(this.handleRequestError.bind(this, res, targetWindow, targetOrigin, data));

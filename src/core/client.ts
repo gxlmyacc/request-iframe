@@ -9,7 +9,8 @@ import {
   HeadersConfig,
   HeaderValue
 } from '../types';
-import { detectContentType, blobToBase64 } from '../utils';
+import { RequestIframeError } from '../utils';
+import { detectContentType, blobToBase64, isWindowAvailable } from '../utils';
 import {
   generateRequestId,
   generateInstanceId,
@@ -146,6 +147,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    Send message (StreamMessageHandler interface implementation)
    */
   public postMessage(message: any): void {
+    // Window check is handled in MessageDispatcher
     this.server.messageDispatcher.send(this.targetWindow, message, this.targetOrigin);
   }
 
@@ -226,7 +228,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    * Check if server is reachable
    */
   public isConnect(): Promise<boolean> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const requestId = generateRequestId();
       let done = false;
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -235,6 +237,17 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         if (timeoutId) clearTimeout(timeoutId);
         this.server._unregisterPendingRequest(requestId);
       };
+
+      // Check if target window is still available before sending ping
+      if (!isWindowAvailable(this.targetWindow)) {
+        reject(new RequestIframeError({
+          message: Messages.TARGET_WINDOW_CLOSED,
+          code: ErrorCode.TARGET_WINDOW_CLOSED,
+          config: undefined,
+          requestId
+        }));
+        return;
+      }
 
       this.server._registerPendingRequest(
         requestId,
@@ -440,8 +453,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         if (done) return;
         done = true;
         cleanup();
+        // Convert to RequestIframeError instance
+        const errorInstance = error instanceof RequestIframeError ? error : new RequestIframeError(error);
         // Run response interceptors to allow error logging
-        Promise.reject(error)
+        Promise.reject(errorInstance)
           .catch((err) => {
             // Run through response interceptors' rejected callbacks
             let promise: Promise<any> = Promise.reject(err);
@@ -457,43 +472,43 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
           })
           .catch(() => {
             // After interceptors, reject with original error
-            reject(error);
+            reject(errorInstance);
           });
       };
 
       const setAckTimeout = () => {
         if (timeoutId) clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {
-          fail({
+          fail(new RequestIframeError({
             message: formatMessage(Messages.ACK_TIMEOUT, ackTimeout),
             code: ErrorCode.ACK_TIMEOUT,
             config: processedConfig,
             requestId
-          });
+          }));
         }, ackTimeout);
       };
 
       const setRequestTimeout = () => {
         if (timeoutId) clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {
-          fail({
+          fail(new RequestIframeError({
             message: formatMessage(Messages.REQUEST_TIMEOUT, timeout),
             code: ErrorCode.TIMEOUT,
             config: processedConfig,
             requestId
-          });
+          }));
         }, timeout);
       };
 
       const setAsyncTimeout = () => {
         if (timeoutId) clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {
-          fail({
+          fail(new RequestIframeError({
             message: formatMessage(Messages.ASYNC_REQUEST_TIMEOUT, asyncTimeout),
             code: ErrorCode.ASYNC_TIMEOUT,
             config: processedConfig,
             requestId
-          });
+          }));
         }, asyncTimeout);
       };
 
@@ -656,16 +671,19 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
             // If server requires acknowledgment, send received message
             if (data.requireAck) {
-              this.server.messageDispatcher.sendMessage(
-                this.targetWindow,
-                this.targetOrigin,
-                MessageType.RECEIVED,
-                requestId,
-                { 
-                  path: requestPath,
-                  targetId: data.creatorId
-                }
-              );
+              // Check if target window is still available before sending
+              if (isWindowAvailable(this.targetWindow)) {
+                this.server.messageDispatcher.sendMessage(
+                  this.targetWindow,
+                  this.targetOrigin,
+                  MessageType.RECEIVED,
+                  requestId,
+                  { 
+                    path: requestPath,
+                    targetId: data.creatorId
+                  }
+                );
+              }
             }
 
             // Parse and save server-set cookies (from Set-Cookie header)
@@ -701,6 +719,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
             // If server requires acknowledgment, send received message
             if (data.requireAck) {
+              // Window check is handled in MessageDispatcher
               this.server.messageDispatcher.sendMessage(
                 this.targetWindow,
                 this.targetOrigin,
@@ -713,7 +732,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               );
             }
 
-            const err: ErrorResponse = {
+            fail(new RequestIframeError({
               message: data.error?.message || Messages.REQUEST_FAILED,
               code: data.error?.code || ErrorCode.REQUEST_ERROR,
               config: processedConfig,
@@ -725,17 +744,16 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                   }
                 : undefined,
               requestId
-            };
-            fail(err);
+            }));
           }
         },
         (error: Error) => {
-          fail({
+          fail(new RequestIframeError({
             message: error.message || Messages.REQUEST_FAILED,
             code: ErrorCode.REQUEST_ERROR,
             config: processedConfig,
             requestId
-          });
+          }));
         },
         this.targetOrigin
       );
@@ -758,6 +776,18 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       if (extraPayload?.streamId) {
         payload.streamId = extraPayload.streamId;
       }
+
+      // Check if target window is still available before sending
+      if (!isWindowAvailable(this.targetWindow)) {
+        fail(new RequestIframeError({
+          message: Messages.TARGET_WINDOW_CLOSED,
+          code: ErrorCode.TARGET_WINDOW_CLOSED,
+          config: processedConfig,
+          requestId
+        }));
+        return;
+      }
+
       this.server.messageDispatcher.sendMessage(
         this.targetWindow,
         this.targetOrigin,
@@ -779,6 +809,14 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    */
   public get isOpen(): boolean {
     return this.server.isOpen;
+  }
+
+  /**
+   * Check if target window is still available (not closed/removed)
+   * @returns true if target window is available, false otherwise
+   */
+  public isAvailable(): boolean {
+    return isWindowAvailable(this.targetWindow);
   }
 
   /**

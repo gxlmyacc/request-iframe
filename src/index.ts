@@ -52,7 +52,8 @@ export type {
 export * from './types';
 export {
   detectContentType,
-  blobToBase64
+  blobToBase64,
+  RequestIframeError
 } from './utils';
 export { InterceptorManager, RequestInterceptorManager, ResponseInterceptorManager } from './interceptors';
 // Constants

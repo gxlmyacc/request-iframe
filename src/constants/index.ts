@@ -97,7 +97,9 @@ export const ErrorCode = {
   /** Stream cancelled */
   STREAM_CANCELLED: 'STREAM_CANCELLED',
   /** Stream not bound */
-  STREAM_NOT_BOUND: 'STREAM_NOT_BOUND'
+  STREAM_NOT_BOUND: 'STREAM_NOT_BOUND',
+  /** Target window closed */
+  TARGET_WINDOW_CLOSED: 'TARGET_WINDOW_CLOSED'
 } as const;
 
 /**

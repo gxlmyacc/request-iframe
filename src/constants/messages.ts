@@ -38,6 +38,7 @@ const defaultMessages = {
 
   /** Client errors */
   IFRAME_NOT_READY: 'iframe.contentWindow is not available',
+  TARGET_WINDOW_CLOSED: 'Target window is closed or no longer available',
 
   /** ClientServer warnings */
   CLIENT_SERVER_IGNORED_MESSAGE_WHEN_CLOSED:

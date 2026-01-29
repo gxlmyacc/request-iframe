@@ -26,7 +26,10 @@ describe('Stream', () => {
         postMessage: mockPostMessage
       } as any;
       mockChannel = {
-        send: (target: Window, message: any, origin: string) => target.postMessage(message, origin)
+        send: (target: Window, message: any, origin: string) => {
+          target.postMessage(message, origin);
+          return true;
+        }
       } as unknown as MessageChannel;
     });
 
@@ -85,6 +88,48 @@ describe('Stream', () => {
       expect(stream.state).toBe('ended');
       // start + 3 data chunks + end = 5 calls
       expect(mockPostMessage).toHaveBeenCalledTimes(5);
+    });
+
+    it('should stop streaming when target window is closed', async () => {
+      let streamDataCount = 0;
+      mockPostMessage.mockImplementation((msg: any) => {
+        if (msg?.type === 'stream_data') {
+          streamDataCount += 1;
+          // After first chunk, simulate target window closed
+          (mockTargetWindow as any).closed = true;
+        }
+      });
+
+      // Make mockChannel respect closed flag
+      (mockChannel as any).send = (target: any, message: any, origin: string) => {
+        if (target?.closed === true) return false;
+        target.postMessage(message, origin);
+        return true;
+      };
+
+      const stream = new IframeWritableStream({
+        iterator: async function* () {
+          yield 'chunk1';
+          yield 'chunk2';
+          yield 'chunk3';
+        }
+      });
+
+      // mockTargetWindow now supports closed/document checks in isWindowAvailable
+      (mockTargetWindow as any).closed = false;
+      (mockTargetWindow as any).document = {};
+
+      stream._bind({
+        requestId: 'req-123',
+        targetWindow: mockTargetWindow,
+        targetOrigin: 'https://example.com',
+        secretKey: 'test',
+        channel: mockChannel
+      });
+
+      await expect(stream.start()).rejects.toThrow('Stream was cancelled');
+      expect(stream.state).toBe('cancelled');
+      expect(streamDataCount).toBe(1);
     });
 
     it('should start stream with next function', async () => {
@@ -221,7 +266,7 @@ describe('Stream', () => {
 
     it('should use channel if provided', async () => {
       const mockChannel = {
-        send: jest.fn()
+        send: jest.fn(() => true)
       } as any;
 
       const stream = new IframeWritableStream();

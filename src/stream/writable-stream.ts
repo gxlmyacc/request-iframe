@@ -7,7 +7,7 @@ import {
   StreamChunk
 } from './types';
 import { createPostMessage } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, MessageRole } from '../constants';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, MessageRole, formatMessage } from '../constants';
 
 /**
  * Generate a unique stream ID
@@ -58,7 +58,7 @@ export class IframeWritableStream implements IIframeWritableStream {
   /**
    * Send message (to client when server-side stream, to server when client-side stream)
    */
-  private sendMessage(type: string, data?: Record<string, any>): void {
+  private sendMessage(type: string, data?: Record<string, any>): boolean {
     if (!this.context) {
       throw new Error(Messages.STREAM_NOT_BOUND);
     }
@@ -76,7 +76,14 @@ export class IframeWritableStream implements IIframeWritableStream {
       targetId: this.context.targetId
     });
     
-    this.context.channel.send(this.context.targetWindow, message, this.context.targetOrigin);
+    const ok = this.context.channel.send(this.context.targetWindow, message, this.context.targetOrigin);
+    if (!ok) {
+      this._state = StreamStateConstant.CANCELLED;
+      // For most stream messages, if we cannot send, treat as a hard cancellation signal
+      // so callers can stop further processing immediately.
+      throw new Error(formatMessage(Messages.STREAM_CANCELLED, 'Target window closed'));
+    }
+    return true;
   }
 
   /**
@@ -113,6 +120,10 @@ export class IframeWritableStream implements IIframeWritableStream {
         this.end();
       }
     } catch (error: any) {
+      // If stream was cancelled due to target window closed, propagate to caller
+      if ((this._state as StreamState) === StreamStateConstant.CANCELLED) {
+        throw error;
+      }
       this.error(error.message || String(error));
     }
   }
@@ -130,13 +141,24 @@ export class IframeWritableStream implements IIframeWritableStream {
         if (this._state !== StreamStateConstant.STREAMING) {
           break;
         }
-        this.sendData(chunk);
+        try {
+          this.sendData(chunk);
+        } catch (error) {
+          // If stream was cancelled due to target window closed, propagate
+          if ((this._state as StreamState) === StreamStateConstant.CANCELLED) {
+            throw error;
+          }
+          throw error;
+        }
       }
       
       if (this._state === StreamStateConstant.STREAMING) {
         this.end();
       }
     } catch (error: any) {
+      if ((this._state as StreamState) === StreamStateConstant.CANCELLED) {
+        throw error;
+      }
       if (this._state === StreamStateConstant.STREAMING) {
         this.error(error.message || String(error));
       }
@@ -162,6 +184,9 @@ export class IframeWritableStream implements IIframeWritableStream {
         this.sendData(result.data);
       }
     } catch (error: any) {
+      if ((this._state as StreamState) === StreamStateConstant.CANCELLED) {
+        throw error;
+      }
       if (this._state === StreamStateConstant.STREAMING) {
         this.error(error.message || String(error));
       }
@@ -216,9 +241,13 @@ export class IframeWritableStream implements IIframeWritableStream {
     this._state = StreamStateConstant.CANCELLED;
     
     if (this.context) {
-      this.sendMessage(MessageType.STREAM_CANCEL, {
-        reason
-      });
+      try {
+        this.sendMessage(MessageType.STREAM_CANCEL, {
+          reason
+        });
+      } catch {
+        // ignore send failures on cancel
+      }
     }
   }
 }

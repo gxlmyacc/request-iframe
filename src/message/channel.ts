@@ -1,7 +1,7 @@
 import {
   PostMessageData
 } from '../types';
-import { isValidPostMessage, createPostMessage } from '../utils';
+import { isValidPostMessage, createPostMessage, isWindowAvailable } from '../utils';
 
 /**
  * Message context (extracted from MessageEvent, transport-agnostic)
@@ -154,8 +154,12 @@ export class MessageChannel {
    * @param message message data (already formatted as PostMessageData)
    * @param targetOrigin target origin (defaults to '*')
    */
-  public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): void {
+  public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): boolean {
+    if (!isWindowAvailable(target)) {
+      return false;
+    }
     target.postMessage(message, targetOrigin);
+    return true;
   }
 
   /**
@@ -172,12 +176,12 @@ export class MessageChannel {
     type: PostMessageData['type'],
     requestId: string,
     data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role'>>
-  ): void {
+  ): boolean {
     const message = createPostMessage(type, requestId, {
       ...data,
       secretKey: this.secretKey
     });
-    this.send(target, message, targetOrigin);
+    return this.send(target, message, targetOrigin);
   }
 
   /**

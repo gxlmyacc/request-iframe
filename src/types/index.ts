@@ -83,7 +83,7 @@ export interface Response<T = any> {
 }
 
 /**
- * Error response
+ * Error response interface
  */
 export interface ErrorResponse {
   /** Error message */
@@ -362,6 +362,8 @@ export interface RequestIframeClient {
   readonly id: string;
   /** Whether message handling is enabled */
   readonly isOpen: boolean;
+  /** Check if target window is still available (not closed/removed) */
+  isAvailable(): boolean;
   /** Enable message handling (register message handler) */
   open(): void;
   /** Disable message handling (unregister message handler, but don't release resources) */

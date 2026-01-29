@@ -255,7 +255,7 @@ export class MessageDispatcher {
    * @param message message data (already formatted as PostMessageData)
    * @param targetOrigin target origin (defaults to '*')
    */
-  public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): void {
+  public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): boolean {
     // Automatically set role and creatorId if not already set (for backward compatibility)
     if (message.role === undefined) {
       message.role = this.role;
@@ -263,7 +263,7 @@ export class MessageDispatcher {
     if (message.creatorId === undefined && this.instanceId) {
       message.creatorId = this.instanceId;
     }
-    this.channel.send(target, message, targetOrigin);
+    return this.channel.send(target, message, targetOrigin);
   }
 
   /**
@@ -280,7 +280,7 @@ export class MessageDispatcher {
     type: PostMessageData['type'],
     requestId: string,
     data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role' | 'creatorId'>>
-  ): void {
+  ): boolean {
     // Automatically set role, creatorId, and secretKey based on dispatcher's properties
     // Create message with role, creatorId, and secretKey using createPostMessage directly
     const message = createPostMessage(type, requestId, {
@@ -289,7 +289,7 @@ export class MessageDispatcher {
       creatorId: this.instanceId,
       secretKey: this.secretKey
     } as any);
-    this.channel.send(target, message, targetOrigin);
+    return this.channel.send(target, message, targetOrigin);
   }
 
   // ==================== Utilities ====================

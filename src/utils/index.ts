@@ -30,6 +30,36 @@ export function getIframeTargetOrigin(iframe: HTMLIFrameElement): string {
 export function isPromise<T>(value: any): value is Promise<T>  {
   return value !== null && typeof value === 'object' && 'then' in value;
 }
+
+/**
+ * Check if target window is still available (not closed/removed)
+ * @param targetWindow Target window to check
+ * @returns true if window is available, false otherwise
+ */
+export function isWindowAvailable(targetWindow: Window | null | undefined): boolean {
+  if (!targetWindow) {
+    return false;
+  }
+
+  try {
+    // Must have postMessage to be a usable target
+    if (typeof (targetWindow as any).postMessage !== 'function') {
+      return false;
+    }
+
+    // For windows opened via window.open(), check closed property
+    if ('closed' in targetWindow && (targetWindow as any).closed === true) {
+      return false;
+    }
+
+    // Avoid touching cross-origin properties (like document) which may throw.
+    // If closed is not true and postMessage exists, treat as available.
+    return true;
+  } catch (e) {
+    // If accessing window properties throws an error, window is likely closed
+    return false;
+  }
+}
 // Export protocol-related functions
 export {
   createPostMessage,
@@ -49,6 +79,9 @@ export * from './path-match';
 
 // Export Cookie-related functions
 export * from './cookie';
+
+// Export Error class
+export { RequestIframeError } from './error';
 
 /**
  * Detect Content-Type based on data type

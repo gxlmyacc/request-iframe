@@ -227,6 +227,8 @@ describe('MessageChannel', () => {
   describe('send', () => {
     it('should send message to target window', () => {
       const targetWindow = {
+        closed: false,
+        document: {},
         postMessage: jest.fn()
       } as any;
       
@@ -234,8 +236,9 @@ describe('MessageChannel', () => {
         path: 'test'
       });
       
-      channel.send(targetWindow, message, 'https://example.com');
+      const ok = channel.send(targetWindow, message, 'https://example.com');
       
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         message,
         'https://example.com'
@@ -244,6 +247,8 @@ describe('MessageChannel', () => {
 
     it('should use default origin * when not specified', () => {
       const targetWindow = {
+        closed: false,
+        document: {},
         postMessage: jest.fn()
       } as any;
       
@@ -251,8 +256,9 @@ describe('MessageChannel', () => {
         path: 'test'
       });
       
-      channel.send(targetWindow, message);
+      const ok = channel.send(targetWindow, message);
       
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         message,
         '*'
@@ -263,10 +269,12 @@ describe('MessageChannel', () => {
   describe('sendMessage', () => {
     it('should create and send message', () => {
       const targetWindow = {
+        closed: false,
+        document: {},
         postMessage: jest.fn()
       } as any;
       
-      channel.sendMessage(
+      const ok = channel.sendMessage(
         targetWindow,
         'https://example.com',
         MessageType.REQUEST,
@@ -277,6 +285,7 @@ describe('MessageChannel', () => {
         }
       );
       
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           __requestIframe__: 1,
@@ -293,10 +302,12 @@ describe('MessageChannel', () => {
     it('should include secretKey in message', () => {
       const channelWithKey = new MessageChannel('test-key');
       const targetWindow = {
+        closed: false,
+        document: {},
         postMessage: jest.fn()
       } as any;
       
-      channelWithKey.sendMessage(
+      const ok = channelWithKey.sendMessage(
         targetWindow,
         'https://example.com',
         MessageType.REQUEST,
@@ -304,6 +315,7 @@ describe('MessageChannel', () => {
         { path: 'test' }
       );
       
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           secretKey: 'test-key'

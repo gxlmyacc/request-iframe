@@ -1,6 +1,6 @@
 {
   "name": "request-iframe",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Communicate with iframes like sending HTTP requests",
   "main": "library/index.js",
   "types": "library/index.d.ts",

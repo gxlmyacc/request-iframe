@@ -441,6 +441,13 @@ server.use(['/user', '/profile'], (req, res, next) => {
 
 request-iframe simulates HTTP's automatic cookie management mechanism:
 
+**Cookie Lifetime (Important):**
+
+- **In-memory only**: Cookies are stored in the Client instance's internal `CookieStore` (not the browser's real cookies).
+- **Lifecycle**: By default, cookies live **from `requestIframeClient()` creation until `client.destroy()`**.
+- **`open()` / `close()`**: These only enable/disable message handling; they **do not clear** the internal cookies.
+- **Expiration**: `Expires` / `Max-Age` are respected. Expired cookies are automatically filtered out when reading/sending (and can be removed via `client.clearCookies()` / `client.removeCookie()`).
+
 **How It Works (Similar to HTTP Set-Cookie):**
 
 1. **When Server sets cookie**: Generate `Set-Cookie` string via `res.cookie(name, value, options)`

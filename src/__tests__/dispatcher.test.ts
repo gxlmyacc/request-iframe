@@ -373,10 +373,11 @@ describe('MessageDispatcher', () => {
       delete (message as any).role;
       delete (message as any).creatorId;
       
-      dispatcher.send(targetWindow, message, 'https://example.com');
+      const ok = dispatcher.send(targetWindow, message, 'https://example.com');
       
       expect(message.role).toBe(MessageRole.CLIENT);
       expect(message.creatorId).toBe('instance-1');
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalled();
     });
 
@@ -391,10 +392,11 @@ describe('MessageDispatcher', () => {
         creatorId: 'custom-id'
       });
       
-      dispatcher.send(targetWindow, message, 'https://example.com');
+      const ok = dispatcher.send(targetWindow, message, 'https://example.com');
       
       expect(message.role).toBe(MessageRole.SERVER);
       expect(message.creatorId).toBe('custom-id');
+      expect(ok).toBe(true);
     });
 
     it('should use default origin * when not specified', () => {
@@ -406,8 +408,9 @@ describe('MessageDispatcher', () => {
         path: 'test'
       });
       
-      dispatcher.send(targetWindow, message);
+      const ok = dispatcher.send(targetWindow, message);
       
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         expect.any(Object),
         '*'
@@ -421,7 +424,7 @@ describe('MessageDispatcher', () => {
         postMessage: jest.fn()
       } as any;
       
-      dispatcher.sendMessage(
+      const ok = dispatcher.sendMessage(
         targetWindow,
         'https://example.com',
         MessageType.REQUEST,
@@ -432,6 +435,7 @@ describe('MessageDispatcher', () => {
         }
       );
       
+      expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'request',

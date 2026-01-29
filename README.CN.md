@@ -441,6 +441,13 @@ server.use(['/user', '/profile'], (req, res, next) => {
 
 request-iframe 模拟了 HTTP 的 cookie 自动管理机制：
 
+**Cookie 有效期与生命周期（重要）：**
+
+- **仅内存存储**：cookies 存在于 Client 实例内部的 `CookieStore`（不会写入浏览器真实 Cookie）。
+- **生命周期**：默认从 `requestIframeClient()` 创建开始，直到 `client.destroy()` 为止。
+- **`open()` / `close()`**：只控制消息监听的开启/关闭，**不会清空**内部 cookies。
+- **过期处理**：会遵循 `Expires` / `Max-Age`。已过期的 cookie 在读取/发送时会被自动过滤（也可以用 `client.clearCookies()` / `client.removeCookie()` 手动清理）。
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Cookies 自动管理流程                         │

@@ -1,7 +1,7 @@
 import { requestIframeClient, clearRequestIframeClientCache } from '../api/client';
 import { requestIframeServer, clearRequestIframeServerCache } from '../api/server';
 import { RequestConfig, Response, ErrorResponse, PostMessageData } from '../types';
-import { HttpHeader, MessageRole, Messages } from '../constants';
+import { HttpHeader, MessageRole, Messages, ErrorCode } from '../constants';
 import { IframeWritableStream } from '../stream';
 
 /**
@@ -5376,6 +5376,212 @@ describe('requestIframeClient and requestIframeServer', () => {
       // Note: middleware2 itself may or may not be called depending on implementation
       // Handler should NOT be called because response was already sent
       expect(handler).not.toHaveBeenCalled();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+  });
+
+  describe('Target window closed detection', () => {
+    it('should return true when target window is available', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        closed: false,
+        postMessage: jest.fn()
+      } as any;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      expect(client.isAvailable()).toBe(true);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should return false when target window is closed', () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      // Create a mock window that appears closed
+      const mockContentWindow = {
+        closed: true,
+        postMessage: jest.fn()
+      } as any;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      expect(client.isAvailable()).toBe(false);
+
+      cleanupIframe(iframe);
+    });
+
+    it('should reject client request when target window is closed', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      // Create a mock window that appears closed
+      const mockContentWindow = {
+        closed: true,
+        document: null
+      } as any;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+
+      try {
+        await client.send('test', { param: 'value' });
+        throw new Error('Should have thrown');
+      } catch (error: any) {
+        expect(error.code).toBe(ErrorCode.TARGET_WINDOW_CLOSED);
+        expect(error.message).toBe(Messages.TARGET_WINDOW_CLOSED);
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should reject client ping when target window is closed', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      // Create a mock window that appears closed
+      const mockContentWindow = {
+        closed: true,
+        document: null
+      } as any;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+
+      try {
+        await client.isConnect();
+        throw new Error('Should have thrown');
+      } catch (error: any) {
+        expect(error.code).toBe(ErrorCode.TARGET_WINDOW_CLOSED);
+        expect(error.message).toBe(Messages.TARGET_WINDOW_CLOSED);
+      }
+
+      cleanupIframe(iframe);
+    });
+
+    it('should throw error when server sends response to closed window', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+
+      server.on('test', (req, res) => {
+        // Simulate window being closed after request is received
+        const closedWindow = {
+          closed: true,
+          document: null
+        } as any;
+        // Replace targetWindow in response object
+        (res as any).targetWindow = closedWindow;
+
+        try {
+          res.send({ result: 'success' });
+        } catch (error: any) {
+          expect(error.code).toBe(ErrorCode.TARGET_WINDOW_CLOSED);
+          expect(error.message).toBe(Messages.TARGET_WINDOW_CLOSED);
+        }
+      });
+
+      // Send request
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            body: { param: 'value' },
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should throw error when server sends stream to closed window', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const server = requestIframeServer();
+
+      server.on('test', async (req, res) => {
+        // Simulate window being closed after request is received
+        const closedWindow = {
+          closed: true,
+          document: null
+        } as any;
+        // Replace targetWindow in response object
+        (res as any).targetWindow = closedWindow;
+
+        const stream = new IframeWritableStream();
+        try {
+          await res.sendStream(stream);
+        } catch (error: any) {
+          expect(error.code).toBe(ErrorCode.TARGET_WINDOW_CLOSED);
+          expect(error.message).toBe(Messages.TARGET_WINDOW_CLOSED);
+        }
+      });
+
+      // Send request
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req123',
+            path: 'test',
+            body: { param: 'value' },
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       server.destroy();
       cleanupIframe(iframe);
