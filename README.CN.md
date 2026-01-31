@@ -74,7 +74,7 @@
 - ⏱️ **智能超时** - 三阶段超时（连接/同步/异步），自动识别长任务
 - 📦 **TypeScript** - 完整的类型定义和智能提示
 - 🔒 **消息隔离** - secretKey 机制避免多实例消息串线
-- 📁 **文件传输** - 支持文件通过流方式传输（Client→Server）
+- 📁 **文件传输** - 支持文件通过流方式传输（Client↔Server）
 - 🌊 **流式传输** - 支持大文件分块传输，支持异步迭代器
 - 🌍 **多语言** - 错误消息可自定义，便于国际化
 - ✅ **协议版本** - 内置版本控制，便于升级兼容
@@ -606,6 +606,8 @@ server.on('/api/data', (req, res) => {
 
 ### 文件传输
 
+> 说明：文件传输（无论 Client→Server 还是 Server→Client）底层都会通过 stream 协议承载；你只需要使用 `client.sendFile()` / `res.sendFile()` 这一层 API 即可。
+
 ```typescript
 // Server 端发送文件
 server.on('/api/download', async (req, res) => {
@@ -638,7 +640,7 @@ if (response.data instanceof File || response.data instanceof Blob) {
 
 #### Client → Server（Client 向 Server 发送文件）
 
-Client 端发送文件**仅走流式**。使用 `sendFile()`（或直接 `send(path, file)`）；Server 端在 `autoResolve: true`（默认）时会把文件自动解析成 `File/Blob` 放到 `req.body`，当 `autoResolve: false` 时则通过 `req.stream` / `req.body` 暴露为 `IframeFileReadableStream`。
+Client 端发送文件使用 `sendFile()`（或直接 `send(path, file)`）；Server 端在 `autoResolve: true`（默认）时会把文件自动解析成 `File/Blob` 放到 `req.body`，当 `autoResolve: false` 时则通过 `req.stream` / `req.body` 暴露为 `IframeFileReadableStream`。
 
 ```typescript
 // Client 端：发送文件（stream，autoResolve 默认 true）
@@ -662,14 +664,74 @@ server.on('/api/upload', async (req, res) => {
 });
 ```
 
-**提示**：当 `client.send()` 的 `body` 是 `File/Blob` 时，会自动分发到 `client.sendFile()`（走流式）。`autoResolve` 为 true（默认）时 Server 拿到 `req.body`（File/Blob），为 false 时拿到 `req.stream` / `req.body`（`IframeFileReadableStream`）。
+**提示**：当 `client.send()` 的 `body` 是 `File/Blob` 时，会自动分发到 `client.sendFile()`。`autoResolve` 为 true（默认）时 Server 拿到 `req.body`（File/Blob），为 false 时拿到 `req.stream` / `req.body`（`IframeFileReadableStream`）。
 
 ### 流式传输（Stream）
 
-对于大文件或需要分块传输的场景，可以使用流式传输：
+Stream 除了用于大文件/分块传输，也可以用于“长连接 / 订阅式交互”（类似 SSE / WebSocket，但基于 `postMessage`）。常见用法有两类：
+
+- **长连接/订阅**：Client 发起一次请求拿到 `response.stream`，然后用 `for await` 持续消费事件；需要结束时调用 `stream.cancel()`。
+- **分块/文件流**：按 chunk 传输数据或文件（下方示例）。
+
+> 长连接注意事项：
+> - `IframeWritableStream` 默认会使用 `asyncTimeout` 作为 `expireTimeout`（避免泄露）。如果你的订阅需要更久，请显式设置更大的 `expireTimeout`，或设置 `expireTimeout: 0` 关闭自动过期（建议配合业务侧取消/重连，避免泄露）。
+> - Server 端的 `res.sendStream(stream)` 会一直等待到流结束；如果你需要在后续主动 `write()` 推送数据，请不要直接 `await` 它，可以用 `void res.sendStream(stream)` 或保存返回的 Promise。
+> - 如果启用了 `maxConcurrentRequestsPerClient`，一个长连接 stream 会占用一个并发槽，需要按业务场景调整。
+> - **事件订阅**：stream 支持 `stream.on(event, listener)`（返回取消订阅函数），可用于埋点/进度/调试（如监听 `start/data/read/write/cancel/end/error/timeout/expired`）。主消费仍建议使用 `for await`。
+
+#### 长连接 / 订阅式交互（push 模式示例）
 
 ```typescript
-import { 
+/**
+ * Server 端：订阅（长连接）
+ * - mode: 'push'：由写侧主动 write()
+ * - expireTimeout: 0：关闭自动过期（谨慎使用，建议结合业务取消/重连）
+ */
+server.on('/api/subscribe', (req, res) => {
+  const stream = new IframeWritableStream({
+    type: 'data',
+    chunked: true,
+    mode: 'push',
+    expireTimeout: 0,
+    /** 可选：写侧空闲检测（等待 pull/ack 太久会做心跳并失败） */
+    streamTimeout: 15000
+  });
+
+  /** 注意：不要 await，否则会一直等到流结束 */
+  void res.sendStream(stream);
+
+  const timer = setInterval(() => {
+    try {
+      stream.write({ type: 'tick', ts: Date.now() });
+    } catch {
+      clearInterval(timer);
+    }
+  }, 1000);
+});
+
+/**
+ * Client 端：持续读取（长连接建议用 for await，而不是 readAll()）
+ */
+const resp = await client.send('/api/subscribe', {});
+if (isIframeReadableStream(resp.stream)) {
+  /** 事件订阅示例（可选） */
+  const off = resp.stream.on(StreamEvent.ERROR, ({ error }) => {
+    console.error('stream error:', error);
+  });
+
+  for await (const evt of resp.stream) {
+    console.log('event:', evt);
+  }
+
+  off();
+}
+```
+
+#### 分块 / 文件流示例
+
+```typescript
+import {
+  StreamEvent,
   IframeWritableStream, 
   IframeFileWritableStream,
   isIframeReadableStream,

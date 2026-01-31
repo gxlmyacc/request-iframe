@@ -276,6 +276,27 @@ export const StreamState = {
 export type StreamStateValue = typeof StreamState[keyof typeof StreamState];
 
 /**
+ * Stream event name constants (for stream.on / observability)
+ */
+export const StreamEvent = {
+  START: 'start',
+  DATA: 'data',
+  READ: 'read',
+  WRITE: 'write',
+  SEND: 'send',
+  PULL: 'pull',
+  ACK: 'ack',
+  END: 'end',
+  CANCEL: 'cancel',
+  ERROR: 'error',
+  TIMEOUT: 'timeout',
+  EXPIRED: 'expired',
+  STATE: 'state'
+} as const;
+
+export type StreamEventValue = typeof StreamEvent[keyof typeof StreamEvent];
+
+/**
  * Message constants (for multi-language support)
  */
 export { Messages, formatMessage, setMessages, resetMessages, getMessages } from './messages';

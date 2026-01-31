@@ -74,7 +74,7 @@ In micro-frontend, iframe nesting, and popup window scenarios, cross-page commun
 - ⏱️ **Smart Timeout** - Three-stage timeout (connection/sync/async), automatically detects long tasks
 - 📦 **TypeScript** - Complete type definitions and IntelliSense
 - 🔒 **Message Isolation** - secretKey mechanism prevents message cross-talk between multiple instances
-- 📁 **File Transfer** - Support for file sending via stream (client→server)
+- 📁 **File Transfer** - File transfer via streams (client↔server)
 - 🌊 **Streaming** - Support for large file chunked transfer, supports async iterators
 - 🌍 **Internationalization** - Error messages can be customized for i18n
 - ✅ **Protocol Versioning** - Built-in version control for upgrade compatibility
@@ -581,6 +581,8 @@ server.on('/api/data', (req, res) => {
 
 ### File Transfer
 
+> Note: File transfer (both Client→Server and Server→Client) is carried by the stream protocol under the hood. You normally only need to use `client.sendFile()` / `res.sendFile()`.
+
 #### Server → Client (Server sends file to client)
 
 ```typescript
@@ -615,7 +617,7 @@ if (response.data instanceof File || response.data instanceof Blob) {
 
 #### Client → Server (Client sends file to server)
 
-Client sends file via stream only. Use `sendFile()` (or `send(path, file)`); server receives either `req.body` as File/Blob when `autoResolve: true` (default), or `req.stream` as `IframeFileReadableStream` when `autoResolve: false`.
+Client sends file using `sendFile()` (or `send(path, file)`); server receives either `req.body` as File/Blob when `autoResolve: true` (default), or `req.stream` as `IframeFileReadableStream` when `autoResolve: false`.
 
 ```typescript
 // Client side: Send file (stream, autoResolve defaults to true)
@@ -639,16 +641,71 @@ server.on('/api/upload', async (req, res) => {
 });
 ```
 
-**Note:** When using `client.send()` with a `File` or `Blob`, it automatically dispatches to `client.sendFile()`, which sends the file via stream. Server gets `req.body` as File/Blob when `autoResolve` is true (default), or `req.stream` / `req.body` as `IframeFileReadableStream` when `autoResolve` is false.
+**Note:** When using `client.send()` with a `File` or `Blob`, it automatically dispatches to `client.sendFile()`. Server gets `req.body` as File/Blob when `autoResolve` is true (default), or `req.stream` / `req.body` as `IframeFileReadableStream` when `autoResolve` is false.
 
 ### Streaming
 
-For large files or scenarios requiring chunked transfer, you can use streaming:
+Streaming is not only for large/chunked transfers, but also works well for **long-lived subscription-style interactions** (similar to SSE/WebSocket, but built on top of `postMessage`).
+
+#### Long-lived subscription (push mode)
+
+> Notes:
+> - `IframeWritableStream` defaults `expireTimeout` to `asyncTimeout` to avoid leaking long-lived streams. For real subscriptions, set a larger `expireTimeout`, or set `expireTimeout: 0` to disable auto-expire (use with care and pair with cancel/reconnect).
+> - `res.sendStream(stream)` waits until the stream ends. If you want to keep pushing via `write()`, **do not** `await` it; use `void res.sendStream(stream)` or keep the returned Promise.
+> - If `maxConcurrentRequestsPerClient` is enabled, a long-lived stream occupies one in-flight request slot.
+> - **Event subscription**: streams support `stream.on(event, listener)` (returns an unsubscribe function) for observability (e.g. `start/data/read/write/cancel/end/error/timeout/expired`). For consuming data, prefer `for await`.
+
+```typescript
+/**
+ * Server side: subscribe (long-lived)
+ * - mode: 'push': writer calls write()
+ * - expireTimeout: 0: disable auto-expire (use with care)
+ */
+server.on('/api/subscribe', (req, res) => {
+  const stream = new IframeWritableStream({
+    type: 'data',
+    chunked: true,
+    mode: 'push',
+    expireTimeout: 0,
+    /** optional: writer-side idle timeout while waiting for pull/ack */
+    streamTimeout: 15000
+  });
+
+  /** do not await, otherwise it blocks until stream ends */
+  void res.sendStream(stream);
+
+  const timer = setInterval(() => {
+    try {
+      stream.write({ type: 'tick', ts: Date.now() });
+    } catch {
+      clearInterval(timer);
+    }
+  }, 1000);
+});
+
+/**
+ * Client side: consume continuously (prefer for-await for long-lived streams)
+ */
+const resp = await client.send('/api/subscribe', {});
+if (isIframeReadableStream(resp.stream)) {
+  /** Optional: observe events */
+  const off = resp.stream.on(StreamEvent.ERROR, ({ error }) => {
+    console.error('stream error:', error);
+  });
+
+  for await (const evt of resp.stream) {
+    console.log('event:', evt);
+  }
+
+  off();
+}
+```
 
 #### Server → Client (Server sends stream to client)
 
 ```typescript
-import { 
+import {
+  StreamEvent,
   IframeWritableStream, 
   IframeFileWritableStream,
   isIframeReadableStream,

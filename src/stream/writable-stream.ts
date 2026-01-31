@@ -7,7 +7,7 @@ import {
   WritableStreamMode
 } from './types';
 import { createPostMessage } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamMode as StreamModeConstant, MessageRole, formatMessage, DefaultTimeout, StreamInternalMessageType } from '../constants';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamMode as StreamModeConstant, MessageRole, formatMessage, DefaultTimeout, StreamInternalMessageType, StreamEvent } from '../constants';
 import type { StreamMessageData } from './types';
 import { IframeStreamCore } from './stream-core';
 
@@ -93,14 +93,17 @@ export class IframeWritableStream
       case StreamInternalMessageType.PULL: {
         const credit = typeof data.credit === 'number' && data.credit > 0 ? data.credit : 1;
         this.pullCredit += credit;
+        this.emit(StreamEvent.PULL, { credit, totalCredit: this.pullCredit });
         // Try flushing buffered chunks or pumping generator
         this.flush();
         break;
       }
       case StreamInternalMessageType.ACK:
         // Ack is treated as heartbeat; no further action required
+        this.emit(StreamEvent.ACK, { seq: data.seq });
         break;
       case StreamInternalMessageType.CANCEL:
+        this.emit(StreamEvent.CANCEL, { reason: data.reason, remote: true });
         this.cancel(data.reason);
         break;
       default:
@@ -146,6 +149,7 @@ export class IframeWritableStream
         return;
       }
       try {
+        this.emit(StreamEvent.TIMEOUT, { timeout });
         this.error(formatMessage(Messages.STREAM_TIMEOUT, timeout));
       } catch {
         /** ignore */
@@ -199,6 +203,7 @@ export class IframeWritableStream
     this.expireTimer = setTimeout(() => {
       if (this._state !== StreamStateConstant.STREAMING) return;
       try {
+        this.emit(StreamEvent.EXPIRED, { timeout: expireTimeout });
         this.error(formatMessage(Messages.STREAM_EXPIRED, expireTimeout));
       } catch {
         /** ignore timer-triggered send failures */
@@ -236,6 +241,13 @@ export class IframeWritableStream
       chunked: this.chunked,
       metadata: this.metadata,
       autoResolve: this.autoResolve
+    });
+    this.emit(StreamEvent.START, {
+      streamId: this.streamId,
+      type: this.type,
+      chunked: this.chunked,
+      mode: this.mode,
+      metadata: this.metadata
     });
 
     try {
@@ -275,6 +287,7 @@ export class IframeWritableStream
     }
     // push mode now buffers and sends based on pull credit
     this.pendingQueue.push({ data, done });
+    this.emit(StreamEvent.WRITE, { data, done });
     this.flush();
   }
 
@@ -348,11 +361,13 @@ export class IframeWritableStream
    * Send data chunk
    */
   private sendData(data: any, done: boolean = false): void {
+    const seq = this.seq++;
     this.sendMessage(MessageType.STREAM_DATA, {
       data: this.encodeData(data),
       done,
-      seq: this.seq++
+      seq
     });
+    this.emit(StreamEvent.SEND, { seq, done });
   }
 
   private flush(): void {
@@ -402,6 +417,9 @@ export class IframeWritableStream
     this.clearIdleTimer();
     this.unregisterControlHandler();
     this.sendMessage(MessageType.STREAM_END);
+    this.emit(StreamEvent.END);
+    this.emit(StreamEvent.STATE, { state: this._state });
+    this.clearAllListeners();
     this.resolveCompletion?.();
   }
 
@@ -418,6 +436,9 @@ export class IframeWritableStream
     this.sendMessage(MessageType.STREAM_ERROR, {
       error: message
     });
+    this.emit(StreamEvent.ERROR, { error: new Error(message) });
+    this.emit(StreamEvent.STATE, { state: this._state });
+    this.clearAllListeners();
     this.resolveCompletion?.();
   }
 
@@ -438,6 +459,8 @@ export class IframeWritableStream
     this.clearExpireTimer();
     this.clearIdleTimer();
     this.unregisterControlHandler();
+    this.emit(StreamEvent.CANCEL, { reason, remote: false });
+    this.emit(StreamEvent.STATE, { state: this._state });
     
     if (this.context) {
       try {
@@ -448,6 +471,7 @@ export class IframeWritableStream
         // ignore send failures on cancel
       }
     }
+    this.clearAllListeners();
     this.resolveCompletion?.();
   }
 }

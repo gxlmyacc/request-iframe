@@ -1,7 +1,8 @@
 import {
   StreamType as StreamTypeConstant,
   StreamState as StreamStateConstant,
-  StreamMode as StreamModeConstant
+  StreamMode as StreamModeConstant,
+  StreamEvent as StreamEventConstant
 } from '../constants';
 import type { MessageChannel } from '../message';
 
@@ -12,6 +13,40 @@ export type StreamType = typeof StreamTypeConstant[keyof typeof StreamTypeConsta
 
 /** Writable stream mode */
 export type WritableStreamMode = typeof StreamModeConstant[keyof typeof StreamModeConstant];
+
+/**
+ * Stream event name
+ */
+export type StreamEventName = typeof StreamEventConstant[keyof typeof StreamEventConstant];
+
+/**
+ * Stream event payload map (for stream.on/once/off typing)
+ */
+export type StreamEventPayloadMap = {
+  start: {
+    streamId: string;
+    type: StreamType;
+    chunked: boolean;
+    mode?: WritableStreamMode;
+    metadata?: Record<string, any>;
+  };
+  data: { chunk: any; done?: boolean; seq?: number };
+  read: { value: any };
+  write: { data: any; done?: boolean };
+  send: { seq: number; done?: boolean };
+  pull: { credit: number; totalCredit?: number };
+  ack: { seq?: number };
+  end: void;
+  cancel: { reason?: string; remote?: boolean; error?: Error };
+  error: { error?: Error };
+  timeout: { timeout?: number };
+  expired: { timeout: number };
+  state: { state: StreamState };
+};
+
+export type StreamEventListener<E extends StreamEventName = StreamEventName> = (
+  payload: StreamEventPayloadMap[E]
+) => void;
 
 /**
  * Stream data chunk
@@ -189,6 +224,13 @@ export interface IIframeWritableStream {
   abort(reason?: string): void;
   /** Cancel stream transfer */
   cancel(reason?: string): void;
+  /**
+   * Subscribe to stream events (debug/observability).
+   * Returns an unsubscribe function.
+   */
+  on<E extends StreamEventName>(event: E, listener: StreamEventListener<E>): () => void;
+  once<E extends StreamEventName>(event: E, listener: StreamEventListener<E>): () => void;
+  off<E extends StreamEventName>(event: E, listener: StreamEventListener<E>): void;
 }
 
 /**
@@ -230,6 +272,13 @@ export interface IIframeReadableStream<T = any> {
   onEnd(callback: () => void): void;
   /** Listen for stream error */
   onError(callback: (error: Error) => void): void;
+  /**
+   * Subscribe to stream events (debug/observability).
+   * Returns an unsubscribe function.
+   */
+  on<E extends StreamEventName>(event: E, listener: StreamEventListener<E>): () => void;
+  once<E extends StreamEventName>(event: E, listener: StreamEventListener<E>): () => void;
+  off<E extends StreamEventName>(event: E, listener: StreamEventListener<E>): void;
 }
 
 /**

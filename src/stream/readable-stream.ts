@@ -5,7 +5,7 @@ import {
   StreamMessageData
 } from './types';
 import { createPostMessage } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamInternalMessageType, formatMessage } from '../constants';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamInternalMessageType, formatMessage, StreamEvent } from '../constants';
 import { IframeStreamCore } from './stream-core';
 
 /**
@@ -65,6 +65,15 @@ export class IframeReadableStream<T = any>
     this.messageHandler.registerStreamHandler(streamId, this.handleStreamMessage.bind(this));
     // Initial pull to start the stream (pull protocol)
     this.requestMore(1);
+
+    // Observable: constructed and ready to receive data
+    this.emit(StreamEvent.START, {
+      streamId: this.streamId,
+      type: this.type,
+      chunked: this.chunked,
+      mode: this.mode,
+      metadata: this.metadata
+    });
   }
 
   private postControl(type: any, body: Record<string, any>): void {
@@ -80,6 +89,7 @@ export class IframeReadableStream<T = any>
     if (this._state !== StreamStateConstant.PENDING && this._state !== StreamStateConstant.STREAMING) return;
     try {
       this.postControl(MessageType.STREAM_PULL as any, { credit });
+      this.emit(StreamEvent.PULL, { credit });
     } catch {
       /** ignore */
     }
@@ -138,11 +148,14 @@ export class IframeReadableStream<T = any>
     this._state = StreamStateConstant.STREAMING;
     const decoded = this.decodeData(data);
     this.chunks.push(decoded);
+    this.emit(StreamEvent.DATA, { chunk: decoded, done, seq });
+    this.emit(StreamEvent.STATE, { state: this._state });
 
     // Ack this chunk (if seq provided)
     if (typeof seq === 'number' && seq >= 0) {
       try {
         this.postControl(MessageType.STREAM_ACK as any, { seq });
+        this.emit(StreamEvent.ACK, { seq });
       } catch {
         /** ignore */
       }
@@ -173,6 +186,7 @@ export class IframeReadableStream<T = any>
     this.notifyWaiters();
     
     this.onEndCallback?.();
+    this.clearAllListeners();
   }
 
   /**
@@ -200,6 +214,7 @@ export class IframeReadableStream<T = any>
     this.notifyWaiters();
     
     this.onErrorCallback?.(error);
+    this.clearAllListeners();
   }
 
   /**
@@ -223,6 +238,7 @@ export class IframeReadableStream<T = any>
 
     super.cancel(formatMessage(Messages.STREAM_CANCELLED, reason || ''));
     this.notifyWaiters();
+    this.emit(StreamEvent.CANCEL, { reason, remote: notifyRemote });
 
     if (notifyRemote) {
       try {
@@ -247,6 +263,7 @@ export class IframeReadableStream<T = any>
     } else {
       this.onErrorCallback?.(new Error(Messages.STREAM_CANCELLED));
     }
+    this.clearAllListeners();
   }
 
   private async performHeartbeat(): Promise<boolean> {
@@ -311,6 +328,7 @@ export class IframeReadableStream<T = any>
     }
 
     // Connection likely dead: fail the stream
+    this.emit(StreamEvent.TIMEOUT, { timeout: this.idleTimeout });
     this.handleError(new Error(formatMessage(Messages.STREAM_TIMEOUT, this.idleTimeout)));
   }
 
@@ -319,7 +337,9 @@ export class IframeReadableStream<T = any>
    */
   public async read(): Promise<T | T[]> {
     if (this._state === StreamStateConstant.ENDED) {
-      return this.mergeChunks();
+      const merged = this.mergeChunks();
+      this.emit(StreamEvent.READ, { value: merged });
+      return merged;
     }
     if (this._state === StreamStateConstant.ERROR || this._state === StreamStateConstant.CANCELLED) {
       throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
@@ -333,7 +353,9 @@ export class IframeReadableStream<T = any>
     }
 
     if (this._state === StreamStateConstant.ENDED) {
-      return this.mergeChunks();
+      const merged = this.mergeChunks();
+      this.emit(StreamEvent.READ, { value: merged });
+      return merged;
     }
     throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
   }
@@ -343,7 +365,9 @@ export class IframeReadableStream<T = any>
    */
   public async readAll(): Promise<T[]> {
     if (this._state === StreamStateConstant.ENDED) {
-      return this.chunks.slice();
+      const list = this.chunks.slice();
+      this.emit(StreamEvent.READ, { value: list });
+      return list;
     }
     if (this._state === StreamStateConstant.ERROR || this._state === StreamStateConstant.CANCELLED) {
       throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
@@ -355,7 +379,9 @@ export class IframeReadableStream<T = any>
     }
 
     if (this._state === StreamStateConstant.ENDED) {
-      return this.chunks.slice();
+      const list = this.chunks.slice();
+      this.emit(StreamEvent.READ, { value: list });
+      return list;
     }
     throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
   }
@@ -384,6 +410,7 @@ export class IframeReadableStream<T = any>
         }
         
         const value = stream.chunks[index++];
+        stream.emit(StreamEvent.READ, { value });
         if (stream.consume) {
           /**
            * Drop already-consumed chunks to reduce memory usage.
