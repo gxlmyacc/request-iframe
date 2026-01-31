@@ -3,13 +3,15 @@ import { createPostMessage, createSetCookie, createClearCookie, detectContentTyp
 import { MessageType, HttpStatus, HttpHeader, getStatusText, MessageRole, ErrorCode } from '../constants';
 import { IframeWritableStream, IframeFileWritableStream, isIframeWritableStream } from '../stream';
 import { MessageChannel } from '../message';
+import { isAckMetaEqual } from '../utils/ack-meta';
 
 
 
 /**
  * Callback waiting for client acknowledgment
  */
-type AckCallback = (received: boolean) => void;
+type AckCallback = (received: boolean, ackMeta?: any) => void;
+type OnSentCallback = () => void;
 
 /**
  * ServerResponse implementation
@@ -23,11 +25,15 @@ export class ServerResponseImpl implements ServerResponse {
   private readonly targetWindow: Window;
   private readonly targetOrigin: string;
   private readonly channel: MessageChannel;
+  private readonly registerStreamHandler?: (streamId: string, handler: (data: any) => void) => void;
+  private readonly unregisterStreamHandler?: (streamId: string) => void;
+  private readonly heartbeat?: () => Promise<boolean>;
   /** Target client ID (usually the creatorId of the original request) */
   private readonly targetId?: string;
   /** Server instance ID (for creatorId in responses) */
   private readonly serverId?: string;
   private onAckCallback?: AckCallback;
+  private onSentCallback?: OnSentCallback;
   public _sent = false;
 
   constructor(
@@ -38,7 +44,13 @@ export class ServerResponseImpl implements ServerResponse {
     targetOrigin: string,
     channel: MessageChannel,
     serverId?: string,
-    targetId?: string
+    targetId?: string,
+    options?: {
+      registerStreamHandler?: (streamId: string, handler: (data: any) => void) => void;
+      unregisterStreamHandler?: (streamId: string) => void;
+      heartbeat?: () => Promise<boolean>;
+      onSent?: OnSentCallback;
+    }
   ) {
     this.requestId = requestId;
     this.path = path;
@@ -48,6 +60,10 @@ export class ServerResponseImpl implements ServerResponse {
     this.channel = channel;
     this.serverId = serverId;
     this.targetId = targetId;
+    this.registerStreamHandler = options?.registerStreamHandler;
+    this.unregisterStreamHandler = options?.unregisterStreamHandler;
+    this.heartbeat = options?.heartbeat;
+    this.onSentCallback = options?.onSent;
   }
 
   /**
@@ -95,11 +111,31 @@ export class ServerResponseImpl implements ServerResponse {
   /**
    * Trigger client acknowledgment callback
    */
-  public _triggerAck(received: boolean): void {
+  public _triggerAck(received: boolean, ackMeta?: any): void {
     if (this.onAckCallback) {
-      this.onAckCallback(received);
+      this.onAckCallback(received, ackMeta);
       this.onAckCallback = undefined;
     }
+  }
+
+  /**
+   * Mark response as sent (and trigger onSent callback once).
+   */
+  private markSent(): void {
+    if (this._sent) return;
+    this._sent = true;
+    if (this.onSentCallback) {
+      const cb = this.onSentCallback;
+      this.onSentCallback = undefined;
+      cb();
+    }
+  }
+
+  /**
+   * Internal: mark as sent for manual error responses.
+   */
+  public _markSent(): void {
+    this.markSent();
   }
 
   /**
@@ -107,9 +143,10 @@ export class ServerResponseImpl implements ServerResponse {
    */
   private _sendRaw(data: any, options?: SendOptions): Promise<boolean> {
     if (this._sent) return Promise.resolve(false);
-    this._sent = true;
+    this.markSent();
 
     const requireAck = options?.requireAck ?? false;
+    const expectedAckMeta = options?.ackMeta;
 
     try {
       // If acknowledgment not required, send directly and return true
@@ -134,7 +171,17 @@ export class ServerResponseImpl implements ServerResponse {
       // Acknowledgment required, wait for client response
       return new Promise((resolve, reject) => {
         try {
-          this._setOnAckCallback(resolve);
+          this._setOnAckCallback((received, receivedAckMeta) => {
+            if (!received) {
+              resolve(false);
+              return;
+            }
+            if (expectedAckMeta !== undefined && !isAckMetaEqual(expectedAckMeta, receivedAckMeta)) {
+              resolve(false);
+              return;
+            }
+            resolve(true);
+          });
 
           this.sendMessage(
             createPostMessage(MessageType.RESPONSE, this.requestId, {
@@ -145,6 +192,7 @@ export class ServerResponseImpl implements ServerResponse {
               statusText: getStatusText(this.statusCode),
               headers: this.headers,
               requireAck: true,
+              ackMeta: expectedAckMeta,
               role: MessageRole.SERVER,
               creatorId: this.serverId,
               targetId: this.targetId
@@ -272,7 +320,7 @@ export class ServerResponseImpl implements ServerResponse {
    */
   public async sendStream(stream: IframeWritableStream): Promise<void> {
     if (this._sent) return;
-    this._sent = true;
+    this.markSent();
 
     // Window check is handled in MessageDispatcher when stream sends messages
 
@@ -283,6 +331,9 @@ export class ServerResponseImpl implements ServerResponse {
       targetOrigin: this.targetOrigin,
       secretKey: this.secretKey,
       channel: this.channel,
+      registerStreamHandler: this.registerStreamHandler,
+      unregisterStreamHandler: this.unregisterStreamHandler,
+      heartbeat: this.heartbeat,
       serverId: this.serverId,
       targetId: this.targetId
     });

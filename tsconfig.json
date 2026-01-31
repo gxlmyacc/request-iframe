@@ -5,8 +5,14 @@
     "lib": ["ES2020", "DOM"],
     "declaration": true,
     "declarationMap": true,
+    "stripInternal": true,
     "outDir": "./library",
     "rootDir": "./src",
+    "baseUrl": "./src",
+    "paths": {
+      "request-iframe": ["./index.ts"],
+      "request-iframe/*": ["./*"]
+    },
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

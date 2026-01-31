@@ -9,7 +9,7 @@
  */
 export const ProtocolVersion = {
   /** Current protocol version */
-  CURRENT: 1,
+  CURRENT: 2,
   /** Minimum supported protocol version (messages below this version will be rejected) */
   MIN_SUPPORTED: 1
 } as const;
@@ -44,6 +44,8 @@ export const HttpStatus = {
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
+  REQUEST_TIMEOUT: 408,
+  TOO_MANY_REQUESTS: 429,
   INTERNAL_SERVER_ERROR: 500,
   BAD_GATEWAY: 502,
   SERVICE_UNAVAILABLE: 503
@@ -60,6 +62,8 @@ export const HttpStatusText: Record<number, string> = {
   [HttpStatus.UNAUTHORIZED]: 'Unauthorized',
   [HttpStatus.FORBIDDEN]: 'Forbidden',
   [HttpStatus.NOT_FOUND]: 'Not Found',
+  [HttpStatus.REQUEST_TIMEOUT]: 'Request Timeout',
+  [HttpStatus.TOO_MANY_REQUESTS]: 'Too Many Requests',
   [HttpStatus.INTERNAL_SERVER_ERROR]: 'Internal Server Error',
   [HttpStatus.BAD_GATEWAY]: 'Bad Gateway',
   [HttpStatus.SERVICE_UNAVAILABLE]: 'Service Unavailable'
@@ -99,7 +103,11 @@ export const ErrorCode = {
   /** Stream not bound */
   STREAM_NOT_BOUND: 'STREAM_NOT_BOUND',
   /** Target window closed */
-  TARGET_WINDOW_CLOSED: 'TARGET_WINDOW_CLOSED'
+  TARGET_WINDOW_CLOSED: 'TARGET_WINDOW_CLOSED',
+  /** Too many concurrent requests (rate limiting) */
+  TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
+  /** Stream start not received in time */
+  STREAM_START_TIMEOUT: 'STREAM_START_TIMEOUT'
 } as const;
 
 /**
@@ -131,7 +139,11 @@ export const MessageType = {
   /** Stream error */
   STREAM_ERROR: 'stream_error',
   /** Stream cancel */
-  STREAM_CANCEL: 'stream_cancel'
+  STREAM_CANCEL: 'stream_cancel',
+  /** Stream pull (receiver requests next chunks) */
+  STREAM_PULL: 'stream_pull',
+  /** Stream ack (receiver acknowledges a chunk) */
+  STREAM_ACK: 'stream_ack'
 } as const;
 
 export const MessageRole = {
@@ -202,6 +214,18 @@ export const StreamType = {
 } as const;
 
 /**
+ * Stream mode constants
+ * - PULL: receiver pulls next chunks (backpressure)
+ * - PUSH: producer pushes via write()
+ */
+export const StreamMode = {
+  PULL: 'pull',
+  PUSH: 'push'
+} as const;
+
+export type StreamModeValue = typeof StreamMode[keyof typeof StreamMode];
+
+/**
  * Stream internal message type constants (for stream internal message handling)
  * Note: These are MessageType.STREAM_* values with the stream_ prefix removed
  */
@@ -213,7 +237,11 @@ export const StreamInternalMessageType = {
   /** Error message */
   ERROR: 'error',
   /** Cancel message */
-  CANCEL: 'cancel'
+  CANCEL: 'cancel',
+  /** Pull message */
+  PULL: 'pull',
+  /** Ack message */
+  ACK: 'ack'
 } as const;
 
 /**

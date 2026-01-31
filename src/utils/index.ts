@@ -77,6 +77,11 @@ export * from './cache';
 // Export path matching functions
 export * from './path-match';
 
+// Export origin matching functions
+export * from './origin';
+
+// ackMeta is a reserved protocol field (internal). Do not export helpers publicly.
+
 // Export Cookie-related functions
 export * from './cookie';
 

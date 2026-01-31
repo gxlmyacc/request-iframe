@@ -2,6 +2,28 @@
   "name": "@request-iframe/react",
   "version": "0.0.1",
   "main": "./library/index.js",
-  "module": "./library/index.js",
-  "typings": "./library/index.d.ts"
+  "module": "./esm/index.js",
+  "types": "./library/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./library/index.d.ts",
+      "import": "./esm/index.js",
+      "require": "./library/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "library",
+    "esm"
+  ],
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "request-iframe": ">=0.0.6"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
+    "build:js": "babel src --out-dir library --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\"",
+    "build:js:esm": "babel src --config-file ./babel.esm.config.js --out-dir esm --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\""
+  }
 }

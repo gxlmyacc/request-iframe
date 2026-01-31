@@ -11,6 +11,29 @@ export interface RequestDefaults {
   timeout?: number;
   /** Async request timeout (milliseconds), timeout after the server indicates it's an async task, default 120000 */
   asyncTimeout?: number;
+  /**
+   * Whether to require a delivery acknowledgment (ACK) for outgoing messages.
+   *
+   * Behavior:
+   * - REQUEST: if true (default), client will wait for server ACK (or error/response) before treating it as delivered
+   * - PING: if true, server may reply with ACK to confirm it accepted the ping
+   *
+   * Notes:
+   * - This is symmetric with `PostMessageData.requireAck` on the receiving side (who should acknowledge).
+   * - For backward compatibility, REQUEST behaves as if requireAck is true when not specified.
+   */
+  requireAck?: boolean;
+  /**
+   * Stream idle timeout (milliseconds).
+   * - Only applies to stream consumption (Response.stream / asyncIterator / read/readAll).
+   * - If set, the stream may perform heartbeat checks and/or fail if the connection is no longer alive.
+   */
+  streamTimeout?: number;
+  /**
+   * Ack metadata (reserved field).
+   * @internal
+   */
+  ackMeta?: any;
   /** 
    * Whether to directly return response.data instead of the full Response object.
    * If true, send() will return Promise<T> instead of Promise<Response<T>>.
@@ -153,7 +176,7 @@ export interface PostMessageData {
   secretKey?: string;
   /** Message type */
   type: 'request' | 'ack' | 'async' | 'response' | 'error' | 'received' | 'ping' | 'pong' | 
-        'stream_start' | 'stream_data' | 'stream_end' | 'stream_error' | 'stream_cancel';
+        'stream_start' | 'stream_data' | 'stream_end' | 'stream_error' | 'stream_cancel' | 'stream_pull' | 'stream_ack';
   /** Request ID */
   requestId: string;
   /** Request path */
@@ -183,8 +206,19 @@ export interface PostMessageData {
   status?: number;
   /** Status text */
   statusText?: string;
-  /** Whether client confirmation of receipt is required (for response/error messages) */
+  /**
+   * Whether the sender requires the receiver to send back a confirmation message.
+   *
+   * Typical usage:
+   * - REQUEST / PING: receiver sends ACK to confirm it accepted the message
+   * - RESPONSE / ERROR: receiver sends RECEIVED to confirm it received the result
+   */
   requireAck?: boolean;
+  /**
+   * Acknowledgement metadata (reserved field).
+   * @internal
+   */
+  ackMeta?: any;
   /** 
    * Message sender role
    * - 'client': message sent by client
@@ -207,6 +241,23 @@ export interface PostMessageData {
   /** Stream ID (when request body is a stream, client sends stream; server receives stream_start next) */
   streamId?: string;
 }
+
+/**
+ * Origin matcher type (supports string, RegExp, Array)
+ */
+export type OriginMatcher = string | RegExp | Array<string | RegExp>;
+
+/**
+ * Origin validator function
+ * @description
+ * Used to validate incoming message origin.
+ * If returns false, the message will be ignored.
+ */
+export type OriginValidator = (
+  origin: string,
+  data: PostMessageData,
+  context: import('../message').MessageContext
+) => boolean;
 
 /**
  * Server Request object (similar to express)
@@ -244,6 +295,11 @@ export interface SendOptions {
    * - If false (default), resolves immediately without waiting for client confirmation
    */
   requireAck?: boolean;
+  /**
+   * Ack metadata (reserved field).
+   * @internal
+   */
+  ackMeta?: any;
 }
 
 /**
@@ -440,7 +496,8 @@ export interface RequestIframeClientServer {
     requestId: string,
     resolve: (data: PostMessageData) => void,
     reject: (error: Error) => void,
-    origin?: string
+    origin?: string,
+    originValidator?: OriginValidator
   ): void;
   /** Internal method: for client to cancel waiting */
   _unregisterPendingRequest(requestId: string): void;
@@ -487,6 +544,22 @@ export interface RequestIframeClientOptions extends RequestDefaults {
    */
   secretKey?: string;
   /**
+   * Override postMessage targetOrigin for sending.
+   * - If target is an iframe element, default comes from iframe.src origin.
+   * - If target is a Window, default is '*'.
+   */
+  targetOrigin?: string;
+  /**
+   * Allowed origins for incoming messages (response/ack/stream/pong, etc.).
+   * This is a best-practice security control for production usage.
+   */
+  allowedOrigins?: OriginMatcher;
+  /**
+   * Custom origin validator (has higher priority than allowedOrigins).
+   * Return false to ignore the message.
+   */
+  validateOrigin?: OriginValidator;
+  /**
    * Whether to enable trace mode.
    * If true, logs will be printed at various points such as before and after requests.
    */
@@ -526,8 +599,24 @@ export interface RequestIframeServerOptions extends Pick<RequestDefaults, 'ackTi
    */
   trace?: boolean;
   /**
+   * Allowed origins for incoming messages (request/ping/received/stream, etc.).
+   * This is a best-practice security control for production usage.
+   */
+  allowedOrigins?: OriginMatcher;
+  /**
+   * Custom origin validator (has higher priority than allowedOrigins).
+   * Return false to ignore the message.
+   */
+  validateOrigin?: OriginValidator;
+  /**
    * Whether to automatically open (start message handling) when creating the server.
    * Default is true. If set to false, you need to manually call server.open() to start message handling.
    */
   autoOpen?: boolean;
+  /**
+   * Max concurrent in-flight requests per client (per origin + creatorId).
+   * Used to avoid message explosion caused by abnormal code or attacks.
+   * - Default: Infinity (no limit)
+   */
+  maxConcurrentRequestsPerClient?: number;
 }

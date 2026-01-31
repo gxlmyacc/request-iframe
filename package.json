@@ -1,15 +1,31 @@
 {
   "name": "request-iframe",
-  "version": "0.0.6",
+  "version": "0.1.0",
   "description": "Communicate with iframes like sending HTTP requests",
   "main": "library/index.js",
+  "module": "esm/index.js",
   "types": "library/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./library/index.d.ts",
+      "import": "./esm/index.js",
+      "require": "./library/index.js"
+    },
+    "./react": {
+      "types": "./react/library/index.d.ts",
+      "import": "./react/esm/index.js",
+      "require": "./react/library/index.js"
+    }
+  },
   "scripts": {
-    "build": "npm run build:types && npm run build:js && npm run build-react:types && npm run build-react:js && npm run build:clean",
-    "build:types": "tsc --emitDeclarationOnly",
-    "build:js": "babel src --out-dir library --extensions .ts --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\"",
+    "build": "node scripts/build.js",
+    "build:preclean": "node scripts/preclean.js",
+    "build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
+    "build:js": "babel src --out-dir library --extensions .ts --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.d.ts\",\"**/*.d.ts.map\"",
+    "build:js:esm": "babel src --config-file ./babel.esm.config.js --out-dir esm --extensions .ts --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.d.ts\",\"**/*.d.ts.map\"",
     "build-react:types": "tsc -p react/tsconfig.json --emitDeclarationOnly",
-    "build-react:js": "babel react/src --out-dir react/library --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\"",
+    "build-react:js": "babel react/src --config-file ./react/babel.config.js --out-dir react/library --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\",\"**/*.d.ts\",\"**/*.d.ts.map\"",
+    "build-react:js:esm": "babel react/src --config-file ./react/babel.esm.config.js --out-dir react/esm --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\",\"**/*.d.ts\",\"**/*.d.ts.map\"",
     "build:clean": "node scripts/clean-build.js",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -20,7 +36,9 @@
   },
   "files": [
     "library",
+    "esm",
     "react/library",
+    "react/esm",
     "react/package.json",
     "README.md",
     "README.CN.md",
@@ -42,12 +60,15 @@
   "author": "gxlmyacc",
   "license": "MIT",
   "dependencies": {
-    "@types/react": "16",
-    "@types/react-dom": "16",
     "core-js": "^3.48.0"
   },
   "peerDependencies": {
     "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@babel/cli": "^7.28.6",
@@ -60,6 +81,8 @@
     "@testing-library/react": "^16.3.2",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.11.24",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
     "coveralls": "^3.1.1",

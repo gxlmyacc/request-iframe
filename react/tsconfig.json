@@ -2,8 +2,19 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "outDir": "./library",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "request-iframe": ["../library/index.d.ts"]
+    }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "library",
+    "library/esm",
+    "src/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
 }

@@ -160,12 +160,12 @@ request-iframe 在 `postMessage` 基础上实现了一套类 HTTP 的通信协�
 | 类型 | 方向 | 说明 |
 |------|------|------|
 | `request` | Client → Server | 客户端发起请求 |
-| `ack` | Server → Client | 服务端确认收到请求 |
+| `ack` | Server → Client | 服务端确认收到请求（当请求 `requireAck` 开启时） |
 | `async` | Server → Client | 通知客户端这是异步任务（handler 返回 Promise 时发送） |
 | `response` | Server → Client | 返回响应数据 |
 | `error` | Server → Client | 返回错误信息 |
-| `received` | Client → Server | 客户端确认收到响应（可选，由 `requireAck` 控制） |
-| `ping` | Client → Server | 连接检测（`isConnect()` 方法） |
+| `received` | Client → Server | 客户端确认收到响应/错误（可选，由响应的 `requireAck` 控制） |
+| `ping` | Client → Server | 连接检测（`isConnect()`；可使用 `requireAck` 确认投递） |
 | `pong` | Server → Client | 连接检测响应 |
 
 ### 超时机制
@@ -176,7 +176,8 @@ request-iframe 采用三阶段超时策略，智能适应不同场景：
 client.send('/api/getData', data, {
   ackTimeout: 1000,       // 阶段1：等待 ACK 的超时时间（默认 1000ms）
   timeout: 5000,          // 阶段2：请求超时时间（默认 5s）
-  asyncTimeout: 120000    // 阶段3：异步请求超时时间（默认 120s）
+  asyncTimeout: 120000,   // 阶段3：异步请求超时时间（默认 120s）
+  requireAck: true        // 是否需要服务端 ACK（默认 true；为 false 则跳过 ACK 阶段，直接进入 timeout）
 });
 ```
 
@@ -218,13 +219,17 @@ client.send('/api/getData', data, {
 | timeout | 中等（5s） | 适用于简单的同步处理，如读取数据、参数校验等 |
 | asyncTimeout | 较长（120s） | 适用于复杂异步操作，如文件处理、批量操作、第三方 API 调用等 |
 
+**补充说明：**
+- `requireAck: false` 会跳过 ACK 阶段，直接以 `timeout` 作为第一阶段计时。
+- 流（Stream）有独立的可选空闲超时：`streamTimeout`（见「流式传输（Stream）」）。
+
 ### 协议版本
 
 每条消息都包含 `__requestIframe__` 字段标识协议版本，以及 `timestamp` 字段记录消息创建时间：
 
 ```typescript
 {
-  __requestIframe__: 1,  // 协议版本号
+  __requestIframe__: 2,  // 协议版本号
   timestamp: 1704067200000,  // 消息创建时间戳（毫秒）
   type: 'request',
   requestId: 'req_xxx',
@@ -235,7 +240,7 @@ client.send('/api/getData', data, {
 
 这使得：
 - 不同版本的库可以做兼容处理
-- 新版本 Server 可兼容旧版本 Client
+- 当前协议版本为 `2`；对于新的 stream pull/ack 流程，建议双方保持一致版本
 - 版本过低时会返回明确的错误信息
 - `timestamp` 便于调试消息延迟、分析通信性能
 
@@ -706,6 +711,8 @@ const response = await client.send('/api/stream', {});
 if (isIframeReadableStream(response.stream)) {
   // 方式1：一次性读取所有数据
   const allData = await response.stream.read();
+  // 如果希望返回类型稳定（始终是 chunk 数组），可使用 readAll()
+  const allChunks = await response.stream.readAll();
   
   // 方式2：使用异步迭代器逐块读取
   for await (const chunk of response.stream) {
@@ -755,17 +762,35 @@ if (isIframeFileReadableStream(fileResponse.stream)) {
 | `IframeReadableStream` | 客户端可读流，用于接收普通数据 |
 | `IframeFileReadableStream` | 客户端文件可读流（文件流） |
 
+> **注意**：文件流内部会进行 Base64 编/解码。Base64 会带来约 33% 的体积膨胀，并且在超大文件场景下可能会有较高的内存/CPU 开销。大文件建议使用 **分块** 文件流（`chunked: true`），并控制 chunk 大小（例如 256KB–1MB）。
+
 **流选项：**
 
 ```typescript
 interface WritableStreamOptions {
   type?: 'data' | 'file';    // 流类型
   chunked?: boolean;          // 是否分块传输（默认 true）
+  mode?: 'pull' | 'push';     // 流模式：pull(默认，按需拉取) / push(主动写入)
+  expireTimeout?: number;     // 流过期时间（ms，可选；默认约等于 asyncTimeout）
+  streamTimeout?: number;     // 写侧空闲超时（ms，可选）：长时间未收到对端 pull/ack 时会做心跳确认并失败
   iterator?: () => AsyncGenerator;  // 数据生成迭代器
   next?: () => Promise<{ data: any; done: boolean }>;  // 数据生成函数
   metadata?: Record<string, any>;   // 自定义元数据
 }
 ```
+
+**流超时/保活：**
+- `streamTimeout`（请求参数）：读侧空闲超时（ms，可选）。消费 `response.stream` 时超过该时间未收到新的 chunk，会先做一次心跳确认，失败则认为流已断开并报错。
+- `streamTimeout`（流参数）：写侧空闲超时（ms，可选）。写侧在 pull/ack 协议下，若长时间未收到对端 `pull/ack`，会做心跳确认并失败（避免长时间无效占用）。
+- `expireTimeout`（流参数）：写侧有效期；过期后会发送 `stream_error`，读侧会收到明确的“已过期”错误。
+
+**pull/ack 协议（新增，默认启用）：**
+- 读侧会自动发送 `stream_pull` 请求更多 chunk，并对每个收到的 chunk 自动发送 `stream_ack`。
+- 写侧只会在收到 `stream_pull` 后才继续发送 `stream_data`，实现真正的背压（按需拉取）。
+
+**consume 默认行为（变更）：**
+- `for await (const chunk of stream)` 默认会 **消费并丢弃已迭代过的 chunk**（`consume: true`），避免长流场景内存无限增长。
+- 如果你希望后续还能 `read()/readAll()` 拿到历史数据，可在创建流时传 `consume: false`（或在业务上自行缓存）。
 
 ### 连接检测
 
@@ -795,6 +820,8 @@ server.on('/api/important', async (req, res) => {
   }
 });
 ```
+
+> **说明**：当响应/错误被客户端“接管”（即存在对应的 pending request）时，库会自动发送 `received`，无需业务侧手动发送。
 
 ### 追踪模式
 
@@ -848,9 +875,14 @@ setMessages({
 | `target` | `HTMLIFrameElement \| Window` | 目标 iframe 元素或 window 对象 |
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
 | `options.trace` | `boolean` | 是否开启追踪模式（可选） |
+| `options.targetOrigin` | `string` | 覆盖 postMessage 的 targetOrigin（可选）。当 `target` 是 `Window` 时默认 `*`；当 `target` 是 iframe 时默认取 `iframe.src` 的 origin。 |
 | `options.ackTimeout` | `number` | 全局默认 ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 全局默认请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 全局默认异步超时（ms），默认 120000 |
+| `options.requireAck` | `boolean` | 全局默认请求投递 ACK（默认 true）。为 false 时请求跳过 ACK 阶段，直接进入 timeout |
+| `options.streamTimeout` | `number` | 全局默认流空闲超时（ms，可选），用于消费 `response.stream` |
+| `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | 接收消息的 origin 白名单（可选，生产环境强烈建议配置） |
+| `options.validateOrigin` | `(origin, data, context) => boolean` | 自定义 origin 校验函数（可选，优先级高于 `allowedOrigins`） |
 
 **返回值：** `RequestIframeClient`
 
@@ -882,6 +914,9 @@ await client.send('/api/longTask', {}, {
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
 | `options.trace` | `boolean` | 是否开启追踪模式（可选） |
 | `options.ackTimeout` | `number` | 等待客户端确认超时（ms），默认 1000 |
+| `options.maxConcurrentRequestsPerClient` | `number` | 每个客户端的最大并发 in-flight 请求数（按 origin + creatorId 维度），默认 Infinity |
+| `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | 接收消息的 origin 白名单（可选，生产环境强烈建议配置） |
+| `options.validateOrigin` | `(origin, data, context) => boolean` | 自定义 origin 校验函数（可选，优先级高于 `allowedOrigins`） |
 
 **返回值：** `RequestIframeServer`
 
@@ -902,6 +937,8 @@ await client.send('/api/longTask', {}, {
 | `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
+| `options.requireAck` | `boolean` | 是否需要服务端 ACK（默认 true）。为 false 时跳过 ACK 阶段 |
+| `options.streamTimeout` | `number` | 流空闲超时（ms，可选），用于消费 `response.stream` |
 | `options.headers` | `object` | 请求 headers（可选） |
 | `options.cookies` | `object` | 请求 cookies（可选，会与内部存储的 cookies 合并，传入的优先级更高） |
 | `options.requestId` | `string` | 自定义请求 ID（可选） |
@@ -953,6 +990,8 @@ await client.send('/api/uploadStream', stream);
 | `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
+| `options.requireAck` | `boolean` | 是否需要服务端 ACK（默认 true）。为 false 时跳过 ACK 阶段 |
+| `options.streamTimeout` | `number` | 流空闲超时（ms，可选），用于消费 `response.stream` |
 | `options.headers` | `object` | 请求 headers（可选） |
 | `options.cookies` | `object` | 请求 cookies（可选） |
 | `options.requestId` | `string` | 自定义请求 ID（可选） |
@@ -974,6 +1013,8 @@ await client.send('/api/uploadStream', stream);
 | `options.ackTimeout` | `number` | ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 请求超时（ms），默认 5000 |
 | `options.asyncTimeout` | `number` | 异步超时（ms），默认 120000 |
+| `options.requireAck` | `boolean` | 是否需要服务端 ACK（默认 true）。为 false 时跳过 ACK 阶段 |
+| `options.streamTimeout` | `number` | 流空闲超时（ms，可选），用于消费 `response.stream` |
 | `options.headers` | `object` | 请求 headers（可选） |
 | `options.cookies` | `object` | 请求 cookies（可选） |
 | `options.requestId` | `string` | 自定义请求 ID（可选） |
@@ -1126,6 +1167,8 @@ server.use(['/a', '/b'], (req, res, next) => { ... });
 ## React Hooks
 
 request-iframe 提供了 React hooks，方便在 React 应用中使用。从 `request-iframe/react` 导入 hooks：
+
+> 注意：只有在使用 `request-iframe/react` 时才需要安装 React；单独安装 `request-iframe` 不依赖 React。
 
 ```typescript
 import { useClient, useServer, useServerHandler, useServerHandlerMap } from 'request-iframe/react';
@@ -1498,8 +1541,12 @@ import {
 | `PROTOCOL_UNSUPPORTED` | 协议版本不支持 |
 | `IFRAME_NOT_READY` | iframe 未就绪 |
 | `STREAM_ERROR` | 流传输错误 |
+| `STREAM_TIMEOUT` | 流空闲超时 |
+| `STREAM_EXPIRED` | 流已过期（可写流超过有效期） |
 | `STREAM_CANCELLED` | 流被取消 |
 | `STREAM_NOT_BOUND` | 流未绑定到请求上下文 |
+| `STREAM_START_TIMEOUT` | 流启动超时（请求体 stream_start 未按时到达） |
+| `TOO_MANY_REQUESTS` | 请求过多（服务端并发限制） |
 
 ### 错误处理示例
 

@@ -11,6 +11,12 @@ export interface MessageContext {
   source?: Window;
   /** Origin of the message */
   origin: string;
+  /**
+   * Whether the receiver accepted this message for processing.
+   * - Used by MessageDispatcher to decide whether it should send an ACK/RECEIVED automatically.
+   * - Should be set by high-level handlers once they确定会处理该消息（例如：路由匹配到 handler，或找到 pending request）。
+   */
+  accepted?: boolean;
   /** ID of the instance that handled this message (if handled) */
   handledBy?: string;
 }

@@ -11,11 +11,17 @@ import { StreamType as StreamTypeConstant } from '../constants';
  * Convert Uint8Array to Base64 string
  */
 function uint8ArrayToBase64(uint8Array: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < uint8Array.length; i++) {
-    binary += String.fromCharCode(uint8Array[i]);
+  /**
+   * Avoid O(n^2) string concatenation for large buffers.
+   * Note: btoa still needs a single binary string, so this mainly improves conversion cost.
+   */
+  const chunkSize = 0x8000; // 32KB per chunk (safe for fromCharCode/apply limits)
+  const parts: string[] = [];
+  for (let i = 0; i < uint8Array.length; i += chunkSize) {
+    const chunk = uint8Array.subarray(i, i + chunkSize);
+    parts.push(String.fromCharCode.apply(null, chunk as unknown as number[]));
   }
-  return btoa(binary);
+  return btoa(parts.join(''));
 }
 
 /**
@@ -143,6 +149,13 @@ export class IframeFileReadableStream
     }
     
     return result;
+  }
+
+  /**
+   * Read all data as a merged Uint8Array (file stream default behavior)
+   */
+  public async read(): Promise<Uint8Array> {
+    return (await super.read()) as Uint8Array;
   }
 
   /**

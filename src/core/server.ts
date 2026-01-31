@@ -1,17 +1,20 @@
-import {
+import type {
   PostMessageData,
   ServerHandler,
   RequestIframeServer,
   Middleware,
-  PathMatcher
+  PathMatcher,
+  OriginMatcher,
+  OriginValidator
 } from '../types';
 import { isCompatibleVersion } from '../utils';
 import { matchPath, matchPathWithParams } from '../utils/path-match';
+import { matchOrigin } from '../utils/origin';
 import { ServerRequestImpl } from './request';
 import { ServerResponseImpl } from './response';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
 import { getOrCreateMessageChannel, releaseMessageChannel } from '../utils/cache';
-import { generateInstanceId } from '../utils';
+import { generateInstanceId, generateRequestId } from '../utils';
 import {
   MessageType,
   ErrorCode,
@@ -39,8 +42,13 @@ interface MiddlewareItem {
  * Pending acknowledgment
  */
 interface PendingAck {
-  resolve: (received: boolean) => void;
+  resolve: (received: boolean, ackMeta?: any) => void;
   reject: (error: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
+}
+
+interface PendingPong {
+  resolve: (ok: boolean) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
 
@@ -49,6 +57,7 @@ interface PendingStreamRequest {
   path: string;
   requestId: string;
   streamId: string;
+  timeoutId: ReturnType<typeof setTimeout>;
   handlerFn: ServerHandler;
   targetWindow: Window;
   targetOrigin: string;
@@ -70,8 +79,17 @@ export interface ServerOptions {
   ackTimeout?: number;
   /** Protocol version validator (optional, uses built-in validator by default) */
   versionValidator?: VersionValidator;
+  /** Allowed origins for incoming messages */
+  allowedOrigins?: OriginMatcher;
+  /** Custom origin validator (higher priority than allowedOrigins) */
+  validateOrigin?: OriginValidator;
   /** Whether to automatically open when creating the server. Default is true. */
   autoOpen?: boolean;
+  /**
+   * Max concurrent in-flight requests per client (per origin + creatorId).
+   * Used to mitigate message explosion caused by abnormal code or attacks.
+   */
+  maxConcurrentRequestsPerClient?: number;
 }
 
 /**
@@ -87,9 +105,14 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   private readonly versionValidator: VersionValidator;
   private readonly handlers = new Map<string, ServerHandler>();
   private readonly middlewares: MiddlewareItem[] = [];
+  private readonly originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
+  private readonly maxConcurrentRequestsPerClient: number;
+  private readonly inFlightByClientKey = new Map<string, number>();
   
   /** Responses waiting for client acknowledgment */
   private readonly pendingAcks = new Map<string, PendingAck>();
+  /** Pending pings waiting for client PONG (server -> client heartbeat) */
+  private readonly pendingPongs = new Map<string, PendingPong>();
 
   /** Pending requests waiting for client stream_start (streamId present) */
   private readonly pendingStreamRequests = new Map<string, PendingStreamRequest>();
@@ -108,6 +131,15 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     this.id = options?.id || generateInstanceId();
     this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.versionValidator = options?.versionValidator ?? isCompatibleVersion;
+    this.maxConcurrentRequestsPerClient = options?.maxConcurrentRequestsPerClient ?? Number.POSITIVE_INFINITY;
+
+    // Build origin validator (incoming messages)
+    if (options?.validateOrigin) {
+      this.originValidator = (origin, data, context) => options.validateOrigin!(origin, data, context);
+    } else if (options?.allowedOrigins) {
+      const matcher = options.allowedOrigins;
+      this.originValidator = (origin) => matchOrigin(origin, matcher);
+    }
     
     // Get or create shared channel and create dispatcher
     const channel = getOrCreateMessageChannel(options?.secretKey);
@@ -117,6 +149,41 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     if (options?.autoOpen !== false) {
       this.open();
     }
+  }
+
+  /**
+   * Check whether an incoming message origin is allowed.
+   */
+  private isOriginAllowed(data: PostMessageData, context: MessageContext): boolean {
+    if (!this.originValidator) return true;
+    try {
+      return this.originValidator(context.origin, data, context);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Build a per-client key used for concurrency limiting.
+   * We intentionally include origin to prevent cross-origin collisions.
+   */
+  private getClientKey(origin: string, creatorId?: string): string {
+    return `${origin}::${creatorId || 'unknown'}`;
+  }
+
+  private incInFlight(clientKey: string): void {
+    const current = this.inFlightByClientKey.get(clientKey) || 0;
+    this.inFlightByClientKey.set(clientKey, current + 1);
+  }
+
+  private decInFlight(clientKey: string): void {
+    const current = this.inFlightByClientKey.get(clientKey) || 0;
+    const next = current - 1;
+    if (next <= 0) {
+      this.inFlightByClientKey.delete(clientKey);
+      return;
+    }
+    this.inFlightByClientKey.set(clientKey, next);
   }
 
   /**
@@ -174,11 +241,20 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       )
     );
 
+    // Handle PONG messages (server -> client heartbeat)
+    this.unregisterFns.push(
+      this.dispatcher.registerHandler(
+        MessageType.PONG,
+        (data, context) => this.handlePong(data, context),
+        handlerOptions
+      )
+    );
+
     // Handle RECEIVED messages (for confirming response delivery)
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         MessageType.RECEIVED,
-        (data) => this.handleReceived(data),
+        (data, context) => this.handleReceived(data, context),
         handlerOptions
       )
     );
@@ -194,20 +270,22 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
         (type: string) => type.startsWith('stream_') && type !== MessageType.STREAM_START,
-        (data, _context) => this.dispatchStreamMessage(data),
+        (data, context) => this.dispatchStreamMessage(data, context),
         handlerOptions
       )
     );
   }
 
   /** Handle stream_start from client (stream request with streamId) */
-  private handleStreamStart(data: PostMessageData, _context: MessageContext): void {
+  private handleStreamStart(data: PostMessageData, context: MessageContext): void {
     if (data.role !== MessageRole.CLIENT) return;
+    if (!this.isOriginAllowed(data, context)) return;
     const body = data.body as StreamMessageData;
     if (!body?.streamId) return;
     const pending = this.pendingStreamRequests.get(data.requestId);
     if (!pending || pending.streamId !== body.streamId) return;
 
+    clearTimeout(pending.timeoutId);
     this.pendingStreamRequests.delete(data.requestId);
 
     const { targetWindow, targetOrigin, res, data: reqData, context: reqContext, handlerFn } = pending;
@@ -225,6 +303,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     };
 
     const streamType = body.type || StreamTypeConstant.DATA;
+    const streamMode = body.mode;
     const streamChunked = body.chunked ?? true;
     const streamMetadata = body.metadata;
 
@@ -235,6 +314,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       const fileStream = new IframeFileReadableStream(body.streamId, data.requestId, streamHandler, {
         chunked: streamChunked,
         metadata: streamMetadata,
+        secretKey: data.secretKey,
+        mode: streamMode,
         filename: streamMetadata?.filename,
         mimeType: streamMetadata?.mimeType,
         size: streamMetadata?.size
@@ -284,8 +365,10 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       // Non-file stream
       const readableStream = new IframeReadableStream(body.streamId, data.requestId, streamHandler, {
         type: streamType,
+        mode: streamMode,
         chunked: streamChunked,
-        metadata: streamMetadata
+        metadata: streamMetadata,
+        secretKey: data.secretKey
       });
       req.body = undefined;
       req.stream = readableStream;
@@ -315,7 +398,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     });
   }
 
-  private dispatchStreamMessage(data: PostMessageData): void {
+  private dispatchStreamMessage(data: PostMessageData, context: MessageContext): void {
+    if (!this.isOriginAllowed(data, context)) return;
     const body = data.body as StreamMessageData;
     if (!body?.streamId) return;
     const handler = this.streamHandlers.get(body.streamId);
@@ -355,7 +439,18 @@ export class RequestIframeServerImpl implements RequestIframeServer {
    */
   private handlePing(data: PostMessageData, context: MessageContext): void {
     if (!context.source) return;
-    
+    if (!this.isOriginAllowed(data, context)) return;
+
+    /**
+     * Only allow one server instance to respond.
+     * This is important when multiple server instances share the same channel.
+     */
+    if (!context.handledBy) {
+      // Mark as accepted so MessageDispatcher can auto-send ACK when requireAck === true
+      context.accepted = true;
+      context.handledBy = this.id;
+    }
+
     // Window check is handled in MessageDispatcher
     this.dispatcher.sendMessage(
       context.source,
@@ -365,15 +460,56 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     );
   }
 
+  private handlePong(data: PostMessageData, context: MessageContext): void {
+    if (!this.isOriginAllowed(data, context)) return;
+    const pending = this.pendingPongs.get(data.requestId);
+    if (pending) {
+      if (!context.handledBy) {
+        context.accepted = true;
+        context.handledBy = this.id;
+      }
+      clearTimeout(pending.timeoutId);
+      this.pendingPongs.delete(data.requestId);
+      pending.resolve(true);
+    }
+  }
+
+  private pingClient(targetWindow: Window, targetOrigin: string, targetClientId?: string): Promise<boolean> {
+    const requestId = generateRequestId();
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        this.pendingPongs.delete(requestId);
+        resolve(false);
+      }, this.ackTimeout);
+      this.pendingPongs.set(requestId, { resolve, timeoutId });
+      // Window check is handled in MessageDispatcher
+      this.dispatcher.sendMessage(
+        targetWindow,
+        targetOrigin,
+        MessageType.PING,
+        requestId,
+        {
+          requireAck: true,
+          targetId: targetClientId
+        }
+      );
+    });
+  }
+
   /**
    * Handle received acknowledgment
    */
-  private handleReceived(data: PostMessageData): void {
+  private handleReceived(data: PostMessageData, context: MessageContext): void {
+    if (!this.isOriginAllowed(data, context)) return;
     const pending = this.pendingAcks.get(data.requestId);
     if (pending) {
+      // Best-effort: prevent other server instances from also resolving
+      if (!context.handledBy) {
+        context.handledBy = this.id;
+      }
       clearTimeout(pending.timeoutId);
       this.pendingAcks.delete(data.requestId);
-      pending.resolve(true);
+      pending.resolve(true, (data as any).ackMeta);
     }
   }
 
@@ -394,6 +530,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     err: any
   ) {
     if (!res._sent) {
+      res._markSent();
       /** 
        * Use INTERNAL_SERVER_ERROR (500) for handler errors unless a different error status code was explicitly set.
        * If statusCode is still the default OK (200), override it to INTERNAL_SERVER_ERROR.
@@ -432,6 +569,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     if (!res._sent && result !== undefined) {
       res.send(result);
     } else if (!res._sent) {
+      res._markSent();
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -486,6 +624,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     // If targetId is specified, only process if it matches this server's id
     if (!data.path || (data.targetId && data.targetId !== this.id)) return;
     if (!context.source) return;
+    if (!this.isOriginAllowed(data, context)) return;
 
     // If message has already been handled by another server instance, skip processing
     if (context.handledBy) {
@@ -524,22 +663,41 @@ export class RequestIframeServerImpl implements RequestIframeServer {
 
     const { handler: handlerFn, params } = handlerMatch;
 
+    const clientKey = this.getClientKey(targetOrigin, data.creatorId);
+    if (Number.isFinite(this.maxConcurrentRequestsPerClient)) {
+      const inFlight = this.inFlightByClientKey.get(clientKey) || 0;
+      if (inFlight >= this.maxConcurrentRequestsPerClient) {
+        // Prevent other server instances from also responding
+        context.handledBy = this.id;
+        this.dispatcher.sendMessage(
+          targetWindow,
+          targetOrigin,
+          MessageType.ERROR,
+          data.requestId,
+          {
+            path: data.path,
+            error: {
+              message: formatMessage(Messages.TOO_MANY_REQUESTS, this.maxConcurrentRequestsPerClient),
+              code: ErrorCode.TOO_MANY_REQUESTS
+            },
+            status: HttpStatus.TOO_MANY_REQUESTS,
+            statusText: HttpStatusText[HttpStatus.TOO_MANY_REQUESTS],
+            requireAck: data.requireAck,
+            ackMeta: (data as any).ackMeta,
+            targetId: data.creatorId
+          }
+        );
+        return;
+      }
+    }
+
+    this.incInFlight(clientKey);
+
+    // Mark as accepted so MessageDispatcher can auto-send ACK (delivery confirmation)
+    context.accepted = true;
+
     // Mark message as handled by this server instance to prevent other server instances from processing it
     context.handledBy = this.id;
-
-    // Send ACK immediately via dispatcher
-    // Use request's creatorId as targetId to route back to the correct client
-    // Window check is handled in MessageDispatcher
-    this.dispatcher.sendMessage(
-      targetWindow,
-      targetOrigin,
-      MessageType.ACK,
-      data.requestId,
-      { 
-        path: data.path,
-        targetId: data.creatorId
-      }
-    );
 
     // Create response object with channel reference
     // Pass request's creatorId as targetId so responses are routed back to the correct client
@@ -551,14 +709,24 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       targetOrigin,
       this.dispatcher.getChannel(),
       this.id,
-      data.creatorId
+      data.creatorId,
+      {
+        registerStreamHandler: (streamId: string, handler: (d: StreamMessageData) => void) => {
+          this.streamHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          this.streamHandlers.delete(streamId);
+        },
+        heartbeat: () => this.pingClient(targetWindow, targetOrigin, data.creatorId),
+        onSent: () => this.decInFlight(clientKey)
+      }
     );
 
     // Register callback waiting for client acknowledgment
     this.registerPendingAck(
       data.requestId,
-      (received: boolean) => {
-        res._triggerAck(received);
+      (received: boolean, ackMeta?: any) => {
+        res._triggerAck(received, ackMeta);
       },
       () => {
         res._triggerAck(false);
@@ -569,10 +737,39 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     // If streamId is present, this is a stream request
     const streamId = (data as any).streamId as string | undefined;
     if (streamId) {
+      const streamStartTimeout = this.ackTimeout;
+      const timeoutId = setTimeout(() => {
+        const pending = this.pendingStreamRequests.get(data.requestId);
+        if (!pending) return;
+        this.pendingStreamRequests.delete(data.requestId);
+        if (!pending.res._sent) {
+          pending.res._markSent();
+          this.dispatcher.sendMessage(
+            pending.targetWindow,
+            pending.targetOrigin,
+            MessageType.ERROR,
+            pending.requestId,
+            {
+              path: pending.path,
+              error: {
+                message: formatMessage(Messages.STREAM_START_TIMEOUT, streamStartTimeout),
+                code: ErrorCode.STREAM_START_TIMEOUT
+              },
+              status: HttpStatus.REQUEST_TIMEOUT,
+              statusText: HttpStatusText[HttpStatus.REQUEST_TIMEOUT],
+              requireAck: pending.data.requireAck,
+              ackMeta: (pending.data as any).ackMeta,
+              targetId: pending.data.creatorId
+            }
+          );
+        }
+      }, streamStartTimeout);
+
       this.pendingStreamRequests.set(data.requestId, {
         path: data.path || '',
         requestId: data.requestId,
         streamId,
+        timeoutId,
         handlerFn,
         targetWindow,
         targetOrigin,
@@ -739,10 +936,16 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     // Clean up pending
     this.pendingAcks.forEach((pending) => clearTimeout(pending.timeoutId));
     this.pendingAcks.clear();
+    this.pendingPongs.forEach((pending) => clearTimeout(pending.timeoutId));
+    this.pendingPongs.clear();
+    this.pendingStreamRequests.forEach((pending) => clearTimeout(pending.timeoutId));
+    this.pendingStreamRequests.clear();
+    this.inFlightByClientKey.clear();
     
     // Clean up handlers
     this.handlers.clear();
     this.middlewares.length = 0;
+    this.streamHandlers.clear();
     
     // Destroy dispatcher and release channel reference
     this.dispatcher.destroy();

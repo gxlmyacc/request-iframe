@@ -1,8 +1,12 @@
 import { renderHook, waitFor } from '@testing-library/react';
-import { useRef } from 'react';
+import * as React from 'react';
 import { useClient, useServer, useServerHandler, useServerHandlerMap } from '../index';
-import { requestIframeClient, clearRequestIframeClientCache } from '../../../library/api/client';
-import { requestIframeServer, clearRequestIframeServerCache } from '../../../library/api/server';
+import {
+  requestIframeClient,
+  clearRequestIframeClientCache,
+  requestIframeServer,
+  clearRequestIframeServerCache
+} from 'request-iframe';
 
 /**
  * Create test iframe
@@ -253,7 +257,7 @@ describe('React Hooks', () => {
       });
 
       const { result } = renderHook(() => {
-        const iframeRef = useRef<HTMLIFrameElement | null>(iframe);
+        const iframeRef = React.useRef<HTMLIFrameElement | null>(iframe);
         return useClient(iframeRef);
       });
 

@@ -288,7 +288,7 @@ describe('MessageChannel', () => {
       expect(ok).toBe(true);
       expect(targetWindow.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          __requestIframe__: 1,
+          __requestIframe__: 2,
           type: 'request',
           requestId: 'req123',
           path: 'test',

@@ -1,4 +1,4 @@
-import { MessageRole, MessageRoleValue } from '../constants';
+import { MessageRole, MessageRoleValue, MessageType } from '../constants';
 import {
   PostMessageData
 } from '../types';
@@ -80,6 +80,14 @@ export class MessageDispatcher {
   
   /** Underlying message channel */
   private readonly channel: MessageChannel;
+
+  /**
+   * Fallback target for sending auto-ack messages when MessageEvent.source is unavailable.
+   * - In real browser postMessage events, `source` should normally exist.
+   * - This is primarily used for unit tests or edge environments that synthesize MessageEvent without `source`.
+   */
+  private fallbackTargetWindow?: Window;
+  private fallbackTargetOrigin: string = '*';
   
   /** Message handler list */
   private readonly handlers: MessageHandlerEntry[] = [];
@@ -104,6 +112,14 @@ export class MessageDispatcher {
     
     // Add receiver callback to handle incoming messages
     this.channel.addReceiver(this.boundReceiver);
+  }
+
+  /**
+   * Set fallback target for outgoing auto-ack messages.
+   */
+  public setFallbackTarget(targetWindow: Window, targetOrigin: string = '*'): void {
+    this.fallbackTargetWindow = targetWindow;
+    this.fallbackTargetOrigin = targetOrigin;
   }
 
   // ==================== Reference Counting ====================
@@ -203,6 +219,41 @@ export class MessageDispatcher {
     const type = data.type as string;
     const version = getProtocolVersion(data);
 
+    /**
+     * Auto-ack state for this incoming message.
+     * - We intentionally couple this to `context.handledBy` as the "accepted/handled" signal.
+     * - For some message types we only ack if they are truly handled (e.g. response requireAck),
+     *   so we avoid incorrectly acknowledging messages when there is no pending consumer.
+     *
+     * Implementation note:
+     * We avoid using Proxy for compatibility and instead hook the `handledBy` property
+     * with a setter so handlers can trigger the ack immediately when they "accept" a message.
+     */
+    const autoAckState = { sent: false };
+    const originalHandledBy = context.handledBy;
+    let handledByValue: string | undefined = originalHandledBy;
+    try {
+      Object.defineProperty(context, 'handledBy', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return handledByValue;
+        },
+        set: (value: string | undefined) => {
+          handledByValue = value;
+          if (value && !autoAckState.sent) {
+            autoAckState.sent = true;
+            this.tryAutoAck(data, context);
+          }
+        }
+      });
+    } catch {
+      /**
+       * In very rare cases `defineProperty` may fail (frozen object).
+       * We still proceed without auto-ack; handlers will continue to work as before.
+       */
+    }
+
     for (const entry of this.handlers) {
       if (this.matchType(type, entry.matcher)) {
         // If message has been handled by a previous handler, stop processing
@@ -228,6 +279,64 @@ export class MessageDispatcher {
           console.error('[request-iframe] Handler error:', e);
         }
       }
+    }
+  }
+
+  /**
+   * Auto-ack logic (generalized requireAck workflow)
+   *
+   * Notes:
+   * - This is intentionally conservative: it only runs after the message is marked as handled
+   *   (via `context.handledBy`) to avoid acknowledging messages that no consumer will process.
+   * - For backward compatibility:
+   *   - REQUEST defaults to requiring ACK unless `requireAck === false`
+   *   - Other message types only ack when `requireAck === true`
+   */
+  private tryAutoAck(data: PostMessageData, context: MessageContext): void {
+    const targetWindow = context.source ?? this.fallbackTargetWindow;
+    if (!targetWindow) return;
+    const targetOrigin = context.source ? context.origin : (this.fallbackTargetOrigin || context.origin);
+
+    const type = data.type as string;
+
+    // Don't auto-ack ack messages (avoid loops)
+    if (type === MessageType.ACK || type === MessageType.RECEIVED) return;
+
+    const shouldAckRequest = type === MessageType.REQUEST && data.requireAck !== false;
+    const shouldAckPing = type === MessageType.PING && data.requireAck === true;
+    const shouldAckResponse =
+      (type === MessageType.RESPONSE || type === MessageType.ERROR) &&
+      data.requireAck === true;
+
+    if ((shouldAckRequest || shouldAckPing) && context.accepted === true) {
+      // Delivery acknowledgment for request/ping
+      this.sendMessage(
+        targetWindow,
+        targetOrigin,
+        MessageType.ACK,
+        data.requestId,
+        {
+          path: data.path,
+          targetId: data.creatorId,
+          ackMeta: data.ackMeta
+        }
+      );
+      return;
+    }
+
+    if (shouldAckResponse && context.accepted === true) {
+      // Receipt acknowledgment for response/error
+      this.sendMessage(
+        targetWindow,
+        targetOrigin,
+        MessageType.RECEIVED,
+        data.requestId,
+        {
+          path: data.path,
+          targetId: data.creatorId,
+          ackMeta: data.ackMeta
+        }
+      );
     }
   }
 

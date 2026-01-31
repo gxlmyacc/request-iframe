@@ -1,4 +1,5 @@
-library
+library/
+esm/
 node_modules
 *.ejs
 *.html

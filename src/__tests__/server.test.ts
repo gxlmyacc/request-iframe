@@ -91,6 +91,73 @@ describe('RequestIframeServer', () => {
     });
   });
 
+  describe('origin validation', () => {
+    it('should ignore request when origin is not allowed (allowedOrigins)', async () => {
+      const server = requestIframeServer({ allowedOrigins: ['https://allowed.com'] } as any);
+      const handler = jest.fn();
+      server.on('test', handler);
+
+      const origin = 'https://blocked.com';
+      const iframe = createTestIframe(origin);
+      const mockWindow = createMockWindow();
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req_origin_1',
+            path: 'test',
+            role: MessageRole.CLIENT
+          } as PostMessageData,
+          origin,
+          source: mockWindow
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(handler).not.toHaveBeenCalled();
+      expect(mockWindow.postMessage).not.toHaveBeenCalled();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should allow request when validateOrigin returns true', async () => {
+      const server = requestIframeServer({
+        validateOrigin: (origin: string) => origin === 'https://example.com'
+      } as any);
+      const handler = jest.fn();
+      server.on('test', handler);
+
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockWindow = createMockWindow();
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req_origin_2',
+            path: 'test',
+            role: MessageRole.CLIENT
+          } as PostMessageData,
+          origin,
+          source: mockWindow
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(handler).toHaveBeenCalled();
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+  });
+
   describe('open and close', () => {
     it('should open server', () => {
       const server = requestIframeServer({ autoOpen: false });
@@ -415,6 +482,73 @@ describe('RequestIframeServer', () => {
             code: ErrorCode.METHOD_NOT_FOUND
           }),
           status: HttpStatus.NOT_FOUND
+        }),
+        origin
+      );
+
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
+    it('should limit concurrent requests per client (maxConcurrentRequestsPerClient)', async () => {
+      const server = requestIframeServer({ maxConcurrentRequestsPerClient: 1 } as any);
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+      const mockContentWindow = {
+        postMessage: jest.fn()
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      server.on('slow', () => {
+        return new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 200));
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req_limit_1',
+            path: 'slow',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            __requestIframe__: 1,
+            timestamp: Date.now(),
+            type: 'request',
+            requestId: 'req_limit_2',
+            path: 'slow',
+            role: MessageRole.CLIENT,
+            targetId: server.id
+          },
+          origin,
+          source: mockContentWindow as any
+        })
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(mockContentWindow.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          requestId: 'req_limit_2',
+          error: expect.objectContaining({
+            message: expect.stringContaining('Too many'),
+            code: ErrorCode.TOO_MANY_REQUESTS
+          }),
+          status: HttpStatus.TOO_MANY_REQUESTS
         }),
         origin
       );

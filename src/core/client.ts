@@ -1,4 +1,4 @@
-import {
+import type {
   RequestConfig,
   RequestOptions,
   Response,
@@ -7,10 +7,13 @@ import {
   RequestIframeClient,
   RequestDefaults,
   HeadersConfig,
-  HeaderValue
+  HeaderValue,
+  OriginMatcher,
+  OriginValidator
 } from '../types';
 import { RequestIframeError } from '../utils';
-import { detectContentType, blobToBase64, isWindowAvailable } from '../utils';
+import { isAckMetaEqual } from '../utils/ack-meta';
+import { detectContentType, blobToBase64, isWindowAvailable, matchOrigin } from '../utils';
 import {
   generateRequestId,
   generateInstanceId,
@@ -42,6 +45,7 @@ import {
   StreamMessageHandler,
   StreamMessageData
 } from '../stream';
+import type { MessageContext } from '../message';
 
 /**
  * Client configuration options
@@ -49,6 +53,8 @@ import {
 export interface ClientOptions extends RequestDefaults {
   secretKey?: string;
   headers?: HeadersConfig;
+  allowedOrigins?: OriginMatcher;
+  validateOrigin?: OriginValidator;
 }
 
 /**
@@ -67,6 +73,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
   private readonly targetOrigin: string;
   private readonly server: RequestIframeClientServer;
   private readonly secretKey?: string;
+  private readonly originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
   
   /** Default timeout configuration */
   private readonly defaultAckTimeout: number;
@@ -111,6 +118,17 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this.targetOrigin = targetOrigin;
     this.server = server;
     this.secretKey = options?.secretKey;
+
+    // Provide fallback target for auto-ack (useful when MessageEvent.source is missing in tests)
+    this.server.messageDispatcher.setFallbackTarget(this.targetWindow, this.targetOrigin);
+
+    // Build origin validator (incoming messages)
+    if (options?.validateOrigin) {
+      this.originValidator = (origin, data, context) => options.validateOrigin!(origin, data, context);
+    } else if (options?.allowedOrigins) {
+      const matcher = options.allowedOrigins;
+      this.originValidator = (origin) => matchOrigin(origin, matcher);
+    }
     
     // Set default timeout configuration
     this.defaultAckTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
@@ -124,8 +142,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this.initialHeaders = options?.headers;
 
     // Register stream message processing callback
-    this.server.setStreamCallback((data) => {
-      this.dispatchStreamMessage(data);
+    this.server.setStreamCallback((data, context) => {
+      this.dispatchStreamMessage(data, context);
     });
   }
 
@@ -154,12 +172,31 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
   /**
    * Dispatch stream message to corresponding handler
    */
-  private dispatchStreamMessage(data: PostMessageData): void {
+  private dispatchStreamMessage(data: PostMessageData, context?: MessageContext): void {
+    // Validate origin for stream messages (stream_data/stream_end/stream_error/stream_cancel)
+    if (context) {
+      if (this.originValidator) {
+        try {
+          if (!this.originValidator(context.origin, data, context)) {
+            return;
+          }
+        } catch {
+          return;
+        }
+      } else if (this.targetOrigin !== '*' && context.origin !== this.targetOrigin) {
+        return;
+      }
+    }
+
     const body = data.body as StreamMessageData;
     if (!body || !body.streamId) return;
     
     const handler = this.streamHandlers.get(body.streamId);
     if (handler) {
+      if (context && !context.handledBy) {
+        context.accepted = true;
+        context.handledBy = this.id;
+      }
       // Extract message type (remove stream_ prefix)
       const messageType = (data.type as string).replace('stream_', '');
       handler({ ...body, type: messageType as any });
@@ -253,7 +290,11 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         requestId,
         (data: PostMessageData) => {
           if (done) return;
-          if (data.type === MessageType.PONG) {
+          if (data.type === MessageType.ACK || data.type === MessageType.PONG) {
+            // Remember server's creatorId as target server ID for future requests
+            if (data.creatorId && !this._targetServerId) {
+              this._targetServerId = data.creatorId;
+            }
             done = true;
             cleanup();
             resolve(true);
@@ -265,7 +306,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
           cleanup();
           resolve(false);
         },
-        this.targetOrigin
+        this.targetOrigin,
+        this.originValidator
       );
 
       timeoutId = setTimeout(() => {
@@ -280,7 +322,11 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         this.targetWindow,
         this.targetOrigin,
         MessageType.PING,
-        requestId
+        requestId,
+        {
+          requireAck: true,
+          targetId: this._targetServerId
+        }
       );
     });
   }
@@ -395,6 +441,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       targetOrigin: this.targetOrigin,
       secretKey: this.secretKey,
       channel: this.server.messageDispatcher.getChannel(),
+      registerStreamHandler: this.registerStreamHandler.bind(this),
+      unregisterStreamHandler: this.unregisterStreamHandler.bind(this),
+      heartbeat: () => this.isConnect(),
       clientId: this.id,
       targetId
     });
@@ -437,6 +486,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       ackTimeout = this.defaultAckTimeout,
       timeout = this.defaultTimeout,
       asyncTimeout = this.defaultAsyncTimeout,
+      requireAck = true,
+      streamTimeout,
+      ackMeta,
       returnData = this.defaultReturnData
     } = processedConfig;
 
@@ -520,6 +572,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
           // Received ACK: server has received request
           if (data.type === MessageType.ACK) {
+            // Optional ackMeta match (ignore mismatched ACK)
+            if (ackMeta !== undefined && !isAckMetaEqual(ackMeta, (data as any).ackMeta)) {
+              return;
+            }
             // Remember server's creatorId as target server ID for future requests
             if (data.creatorId && !this._targetServerId) {
               this._targetServerId = data.creatorId;
@@ -548,6 +604,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
             const streamBody = data.body as StreamMessageData;
             const streamId = streamBody.streamId;
             const streamType = streamBody.type || StreamTypeConstant.DATA;
+            const streamMode = streamBody.mode;
             const streamChunked = streamBody.chunked ?? true;
             const streamMetadata = streamBody.metadata;
             const autoResolve = streamBody.autoResolve ?? false;
@@ -561,6 +618,10 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
                 {
                   chunked: streamChunked,
                   metadata: streamMetadata,
+                  secretKey: this.secretKey,
+                  idleTimeout: streamTimeout,
+                  heartbeat: () => this.isConnect(),
+                  mode: streamMode,
                   filename: streamMetadata?.filename,
                   mimeType: streamMetadata?.mimeType,
                   size: streamMetadata?.size
@@ -631,8 +692,12 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               this,
               {
                 type: streamType,
+                mode: streamMode,
                 chunked: streamChunked,
-                metadata: streamMetadata
+                metadata: streamMetadata,
+                secretKey: this.secretKey,
+                idleTimeout: streamTimeout,
+                heartbeat: () => this.isConnect()
               }
             );
 
@@ -669,23 +734,6 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               this._targetServerId = data.creatorId;
             }
 
-            // If server requires acknowledgment, send received message
-            if (data.requireAck) {
-              // Check if target window is still available before sending
-              if (isWindowAvailable(this.targetWindow)) {
-                this.server.messageDispatcher.sendMessage(
-                  this.targetWindow,
-                  this.targetOrigin,
-                  MessageType.RECEIVED,
-                  requestId,
-                  { 
-                    path: requestPath,
-                    targetId: data.creatorId
-                  }
-                );
-              }
-            }
-
             // Parse and save server-set cookies (from Set-Cookie header)
             if (data.headers && data.headers[HttpHeader.SET_COOKIE]) {
               const setCookies = data.headers[HttpHeader.SET_COOKIE];
@@ -717,21 +765,6 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
               this._targetServerId = data.creatorId;
             }
 
-            // If server requires acknowledgment, send received message
-            if (data.requireAck) {
-              // Window check is handled in MessageDispatcher
-              this.server.messageDispatcher.sendMessage(
-                this.targetWindow,
-                this.targetOrigin,
-                MessageType.RECEIVED,
-                requestId,
-                { 
-                  path: requestPath,
-                  targetId: data.creatorId
-                }
-              );
-            }
-
             fail(new RequestIframeError({
               message: data.error?.message || Messages.REQUEST_FAILED,
               code: data.error?.code || ErrorCode.REQUEST_ERROR,
@@ -755,11 +788,16 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
             requestId
           }));
         },
-        this.targetOrigin
+        this.targetOrigin,
+        this.originValidator
       );
 
-      // Set ACK timeout
-      setAckTimeout();
+      // Set ACK timeout (delivery stage). If disabled, start request timeout immediately.
+      if (requireAck === false) {
+        setRequestTimeout();
+      } else {
+        setAckTimeout();
+      }
 
       // Get cookies matching request path and merge with user-provided cookies (user-provided takes precedence)
       const pathMatchedCookies = this._cookieStore.getForPath(requestPath);
@@ -771,7 +809,9 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         body,
         headers: mergedHeaders,
         cookies: mergedCookies,
-        targetId
+        targetId,
+        requireAck,
+        ackMeta
       };
       if (extraPayload?.streamId) {
         payload.streamId = extraPayload.streamId;

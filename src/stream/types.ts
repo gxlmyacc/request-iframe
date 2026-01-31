@@ -1,10 +1,17 @@
-import { StreamType as StreamTypeConstant, StreamState as StreamStateConstant } from '../constants';
+import {
+  StreamType as StreamTypeConstant,
+  StreamState as StreamStateConstant,
+  StreamMode as StreamModeConstant
+} from '../constants';
 import type { MessageChannel } from '../message';
 
 /**
  * Stream type
  */
 export type StreamType = typeof StreamTypeConstant[keyof typeof StreamTypeConstant];
+
+/** Writable stream mode */
+export type WritableStreamMode = typeof StreamModeConstant[keyof typeof StreamModeConstant];
 
 /**
  * Stream data chunk
@@ -24,6 +31,24 @@ export interface WritableStreamOptions {
   type?: StreamType;
   /** Whether to use chunked transfer (true: multiple transfers, false: single transfer) */
   chunked?: boolean;
+  /**
+   * Stream mode
+   * - pull (default): uses iterator/next to produce chunks
+   * - push: user calls write()/end() manually (iterator/next not required)
+   */
+  mode?: WritableStreamMode;
+  /**
+   * Stream expire timeout (milliseconds).
+   * If set to a positive number, the stream will automatically error out after this duration
+   * to avoid leaking resources when the receiver never finishes consuming.
+   */
+  expireTimeout?: number;
+  /**
+   * Stream idle timeout (milliseconds) on the writer side.
+   * - Used for pull/ack protocol: if the writer does not receive pull/ack within this duration,
+   *   it will perform a heartbeat check (if available) and fail the stream if not alive.
+   */
+  streamTimeout?: number;
   /** Data generator iterator (higher priority than next) */
   iterator?: () => AsyncGenerator<any, void, unknown>;
   /** Data generator function (returns next chunk on each call) */
@@ -47,6 +72,28 @@ export interface ReadableStreamOptions {
   chunked?: boolean;
   /** Stream metadata */
   metadata?: Record<string, any>;
+  /** secretKey (for generating outgoing stream control messages like stream_cancel) */
+  secretKey?: string;
+  /**
+   * Idle timeout (milliseconds) while waiting for new stream data.
+   * - When triggered, the stream may perform a heartbeat check (if provided).
+   */
+  idleTimeout?: number;
+  /**
+   * Heartbeat function used during idle timeout.
+   * - Should resolve true if connection is still alive, otherwise false.
+   */
+  heartbeat?: () => Promise<boolean>;
+  /**
+   * Whether to discard already-consumed chunks during async iteration to reduce memory usage.
+   * Default is false (keeps all chunks, useful for read()/readAll()).
+   */
+  consume?: boolean;
+  /**
+   * Stream mode from the sender (optional).
+   * - Populated from stream_start so receiver can make decisions.
+   */
+  mode?: WritableStreamMode;
 }
 
 /**
@@ -87,6 +134,18 @@ export interface StreamBindContext {
   secretKey?: string;
   /** MessageChannel for sending messages */
   channel: MessageChannel;
+  /**
+   * Register stream control message handler (for pull/ack/cancel) on the owner side.
+   * This allows writable streams to receive `stream_*` control messages routed by core client/server.
+   */
+  registerStreamHandler?: (streamId: string, handler: (data: StreamMessageData) => void) => void;
+  /** Unregister stream handler */
+  unregisterStreamHandler?: (streamId: string) => void;
+  /**
+   * Heartbeat function used by streamTimeout on writer side (optional).
+   * Should resolve true if connection is alive.
+   */
+  heartbeat?: () => Promise<boolean>;
   /** Server instance ID (for server-side streams, used as creatorId) */
   serverId?: string;
   /** Client instance ID (for client-side streams, used as creatorId) */
@@ -116,6 +175,18 @@ export interface IIframeWritableStream {
   _bind(context: StreamBindContext): void;
   /** Start stream transfer */
   start(): Promise<void>;
+  /**
+   * Push a chunk manually (only meaningful when mode === 'push').
+   * @param data Chunk payload
+   * @param done Whether this is the last chunk
+   */
+  write(data: any, done?: boolean): void;
+  /**
+   * End the stream (only meaningful when mode === 'push').
+   */
+  end(): void;
+  /** Abort stream transfer */
+  abort(reason?: string): void;
   /** Cancel stream transfer */
   cancel(reason?: string): void;
 }
@@ -134,10 +205,25 @@ export interface IIframeReadableStream<T = any> {
   readonly state: StreamState;
   /** Stream metadata */
   readonly metadata?: Record<string, any>;
-  /** Read all data (for non-chunked streams or wait for chunked stream to complete) */
-  read(): Promise<T>;
+  /**
+   * Stream mode from the sender (if provided).
+   */
+  readonly mode?: WritableStreamMode;
+  /**
+   * Read all data (waits until the stream ends).
+   * - Non-chunked streams typically resolve to a single chunk (T)
+   * - Chunked streams may resolve to T[] (depending on stream implementation)
+   */
+  read(): Promise<T | T[]>;
+  /**
+   * Read all chunks as an array (always returns T[]).
+   * Useful for chunked streams when you want a consistent return type.
+   */
+  readAll(): Promise<T[]>;
   /** Async iterator (for chunked streams) */
   [Symbol.asyncIterator](): AsyncIterator<T>;
+  /** Abort stream */
+  abort(reason?: string): void;
   /** Cancel stream */
   cancel(reason?: string): void;
   /** Listen for stream end */
@@ -176,10 +262,16 @@ export interface StreamMessageData {
   type?: StreamType;
   /** Whether chunked */
   chunked?: boolean;
+  /** Stream mode (provided by stream_start) */
+  mode?: WritableStreamMode;
   /** Data chunk */
   data?: any;
+  /** Chunk sequence number (used by pull/ack protocol) */
+  seq?: number;
   /** Whether this is the last chunk */
   done?: boolean;
+  /** Pull credit (how many chunks requested) */
+  credit?: number;
   /** Error message */
   error?: string;
   /** Cancel reason */

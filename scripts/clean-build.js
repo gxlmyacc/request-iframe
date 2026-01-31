@@ -5,7 +5,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const dirsToClean = ['library/__tests__', 'react/library/__tests__'];
+const dirsToClean = [
+  'library/__tests__',
+  'esm/__tests__',
+  'react/library/__tests__',
+  'react/esm/__tests__'
+];
 const root = path.resolve(__dirname, '..');
 
 dirsToClean.forEach((dir) => {

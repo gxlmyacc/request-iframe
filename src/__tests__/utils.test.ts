@@ -39,7 +39,7 @@ describe('utils', () => {
       const after = Date.now();
 
       expect(message).toEqual({
-        __requestIframe__: 1,
+        __requestIframe__: 2,
         timestamp: expect.any(Number),
         type: 'request',
         requestId: 'req123',

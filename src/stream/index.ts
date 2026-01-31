@@ -1,6 +1,8 @@
 // Type exports
 export * from './types';
 
+// Duplex core is internal and not exported publicly.
+
 // Writable stream (server-side)
 export { IframeWritableStream } from './writable-stream';
 export { IframeFileWritableStream } from './file-stream';

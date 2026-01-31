@@ -229,7 +229,7 @@ request-iframe implements an HTTP-like communication protocol on top of `postMes
        │                                          │
        │  ──── REQUEST ────────────────────────>  │  Send request
        │                                          │
-       │  <──── ACK ───────────────────────────  │  Acknowledge receipt
+       │  <──── ACK (optional) ────────────────  │  Acknowledge receipt (controlled by request `requireAck`, default true)
        │                                          │
        │                                          │  Execute handler
        │                                          │
@@ -237,7 +237,7 @@ request-iframe implements an HTTP-like communication protocol on top of `postMes
        │                                          │
        │  <──── RESPONSE ──────────────────────  │  Return result
        │                                          │
-       │  ──── RECEIVED (optional) ────────────>  │  Acknowledge receipt of response
+       │  ──── RECEIVED (optional) ────────────>  │  Acknowledge receipt of response/error (controlled by response `requireAck`)
        │                                          │
 ```
 
@@ -246,13 +246,15 @@ request-iframe implements an HTTP-like communication protocol on top of `postMes
 | Type | Direction | Description |
 |------|-----------|-------------|
 | `request` | Client → Server | Client initiates request |
-| `ack` | Server → Client | Server acknowledges receipt of request |
+| `ack` | Server → Client | Server acknowledges receipt of request (when request `requireAck` is enabled) |
 | `async` | Server → Client | Notifies client this is an async task (sent when handler returns Promise) |
 | `response` | Server → Client | Returns response data |
 | `error` | Server → Client | Returns error information |
-| `received` | Client → Server | Client acknowledges receipt of response (optional, controlled by `requireAck`) |
-| `ping` | Client → Server | Connection detection (`isConnect()` method) |
+| `received` | Client → Server | Client acknowledges receipt of response/error (optional, controlled by response `requireAck`) |
+| `ping` | Client → Server | Connection detection (`isConnect()` method, may use `requireAck` to confirm delivery) |
 | `pong` | Server → Client | Connection detection response |
+| `stream_pull` | Receiver → Sender | Stream pull: receiver requests next chunks (pull/ack protocol) |
+| `stream_ack` | Receiver → Sender | Stream ack: receiver acknowledges a chunk (pull/ack protocol) |
 
 ### Timeout Mechanism
 
@@ -262,7 +264,8 @@ request-iframe uses a three-stage timeout strategy to intelligently adapt to dif
 client.send('/api/getData', data, {
   ackTimeout: 1000,       // Stage 1: ACK timeout (default 1000ms)
   timeout: 5000,          // Stage 2: Request timeout (default 5s)
-  asyncTimeout: 120000    // Stage 3: Async request timeout (default 120s)
+  asyncTimeout: 120000,   // Stage 3: Async request timeout (default 120s)
+  requireAck: true        // Whether to wait for server ACK before switching to stage 2 (default true)
 });
 ```
 
@@ -304,13 +307,17 @@ Send REQUEST
 | timeout | Medium (5s) | Suitable for simple synchronous processing, like reading data, parameter validation |
 | asyncTimeout | Long (120s) | Suitable for complex async operations, like file processing, batch operations, third-party API calls |
 
+**Notes:**
+- If you set `requireAck: false`, the request will **skip** the ACK stage and start `timeout` immediately.
+- Stream transfer has its own optional idle timeout: use `streamTimeout` (see [Streaming](#streaming)).
+
 ### Protocol Version
 
 Each message contains a `__requestIframe__` field identifying the protocol version, and a `timestamp` field recording message creation time:
 
 ```typescript
 {
-  __requestIframe__: 1,  // Protocol version number
+  __requestIframe__: 2,  // Protocol version number
   timestamp: 1704067200000,  // Message creation timestamp (milliseconds)
   type: 'request',
   requestId: 'req_xxx',
@@ -321,7 +328,7 @@ Each message contains a `__requestIframe__` field identifying the protocol versi
 
 This enables:
 - Different library versions can handle compatibility
-- New version Server can be compatible with old version Client
+- Current protocol version is `2`. For the new stream pull/ack flow, both sides should use the same version.
 - Clear error messages when version is too low
 - `timestamp` facilitates debugging message delays and analyzing communication performance
 
@@ -630,6 +637,11 @@ server.on('/api/stream', async (req, res) => {
   const stream = new IframeWritableStream({
     type: 'data',
     chunked: true,
+    mode: 'pull', // default: pull/ack protocol (backpressure)
+    // Optional: auto-expire stream to avoid leaking resources (default: asyncTimeout)
+    // expireTimeout: 120000,
+    // Optional: writer-side idle timeout while waiting for pull/ack
+    // streamTimeout: 10000,
     // Generate data using async iterator
     iterator: async function* () {
       for (let i = 0; i < 10; i++) {
@@ -643,14 +655,19 @@ server.on('/api/stream', async (req, res) => {
 });
 
 // Client side: Receive stream data
-const response = await client.send('/api/stream', {});
+const response = await client.send('/api/stream', {}, { streamTimeout: 10000 });
 
 // Check if it's a stream response
 if (isIframeReadableStream(response.stream)) {
+  // Sender stream mode (from stream_start)
+  console.log('Stream mode:', response.stream.mode); // 'pull' | 'push' | undefined
+
   // Method 1: Read all data at once
   const allData = await response.stream.read();
+  // If you want a consistent return type (always an array of chunks), use readAll()
+  const allChunks = await response.stream.readAll();
   
-  // Method 2: Read chunk by chunk using async iterator
+  // Method 2: Read chunk by chunk using async iterator (consume defaults to true)
   for await (const chunk of response.stream) {
     console.log('Received chunk:', chunk);
   }
@@ -728,6 +745,20 @@ server.on('/api/uploadStream', async (req, res) => {
 | `IframeReadableStream` | Client-side readable stream for receiving regular data |
 | `IframeFileReadableStream` | Client-side file readable stream, automatically handles base64 decoding |
 
+> **Note**: File streams are base64-encoded internally. Base64 introduces ~33% size overhead and can be memory/CPU heavy for very large files. For large files, prefer **chunked** file streams (`chunked: true`) and keep chunk sizes moderate (e.g. 256KB–1MB).
+
+**Stream timeouts:**
+- `options.streamTimeout` (request option): client-side stream idle timeout while consuming `response.stream` (data/file streams). When triggered, the client will attempt a heartbeat check and fail the stream if the connection is not alive.
+- `expireTimeout` (writable stream option): writer-side stream lifetime. When expired, the writer sends `stream_error` and the reader will fail the stream with `STREAM_EXPIRED`.
+- `streamTimeout` (writable stream option): writer-side idle timeout. If the writer does not receive `stream_pull/stream_ack` for a long time, it will heartbeat-check and fail to avoid wasting resources.
+
+**Pull/Ack protocol (default):**
+- Reader automatically sends `stream_pull` to request chunks and sends `stream_ack` for each received chunk.
+- Writer only sends `stream_data` when it has received `stream_pull`, enabling real backpressure.
+
+**consume default change:**
+- `for await (const chunk of response.stream)` defaults to **consume and drop** already iterated chunks (`consume: true`) to prevent unbounded memory growth for long streams.
+
 ### Connection Detection
 
 ```typescript
@@ -756,6 +787,8 @@ server.on('/api/important', async (req, res) => {
   }
 });
 ```
+
+> **Note**: Client acknowledgment (`received`) is sent automatically by the library when the response/error is accepted by the client (i.e., there is a matching pending request). You don't need to manually send `received`.
 
 ### Trace Mode
 
@@ -809,9 +842,14 @@ Create a Client instance.
 | `target` | `HTMLIFrameElement \| Window` | Target iframe element or window object |
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
 | `options.trace` | `boolean` | Whether to enable trace mode (optional) |
+| `options.targetOrigin` | `string` | Override postMessage targetOrigin for sending (optional). If `target` is a `Window`, default is `*`. |
 | `options.ackTimeout` | `number` | Global default ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Global default request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Global default async timeout (ms), default 120000 |
+| `options.requireAck` | `boolean` | Global default for request delivery ACK (default true). If false, requests skip the ACK stage and start `timeout` immediately |
+| `options.streamTimeout` | `number` | Global default stream idle timeout (ms) when consuming `response.stream` (optional) |
+| `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | Allowlist for incoming message origins (optional, recommended for production) |
+| `options.validateOrigin` | `(origin, data, context) => boolean` | Custom origin validator (optional, higher priority than `allowedOrigins`) |
 
 **Returns:** `RequestIframeClient`
 
@@ -826,6 +864,9 @@ Create a Server instance.
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
 | `options.trace` | `boolean` | Whether to enable trace mode (optional) |
 | `options.ackTimeout` | `number` | Wait for client acknowledgment timeout (ms), default 1000 |
+| `options.maxConcurrentRequestsPerClient` | `number` | Max concurrent in-flight requests per client (per origin + creatorId). Default Infinity |
+| `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | Allowlist for incoming message origins (optional, recommended for production) |
+| `options.validateOrigin` | `(origin, data, context) => boolean` | Custom origin validator (optional, higher priority than `allowedOrigins`) |
 
 **Returns:** `RequestIframeServer`
 
@@ -844,6 +885,8 @@ Send a request. Automatically dispatches to `sendFile()` or `sendStream()` based
 | `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
+| `options.requireAck` | `boolean` | Whether to require server delivery ACK (default true). If false, skips ACK stage |
+| `options.streamTimeout` | `number` | Stream idle timeout (ms) while consuming `response.stream` (optional) |
 | `options.headers` | `object` | Request headers (optional) |
 | `options.cookies` | `object` | Request cookies (optional, merged with internally stored cookies, passed-in takes priority) |
 | `options.requestId` | `string` | Custom request ID (optional) |
@@ -895,6 +938,8 @@ Send file as request body (via stream; server receives File/Blob when autoResolv
 | `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
+| `options.requireAck` | `boolean` | Whether to require server delivery ACK (default true). If false, skips ACK stage |
+| `options.streamTimeout` | `number` | Stream idle timeout (ms) while consuming `response.stream` (optional) |
 | `options.headers` | `object` | Request headers (optional) |
 | `options.cookies` | `object` | Request cookies (optional) |
 | `options.requestId` | `string` | Custom request ID (optional) |
@@ -916,6 +961,8 @@ Send stream as request body (server receives readable stream).
 | `options.ackTimeout` | `number` | ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Request timeout (ms), default 5000 |
 | `options.asyncTimeout` | `number` | Async timeout (ms), default 120000 |
+| `options.requireAck` | `boolean` | Whether to require server delivery ACK (default true). If false, skips ACK stage |
+| `options.streamTimeout` | `number` | Stream idle timeout (ms) while consuming `response.stream` (optional) |
 | `options.headers` | `object` | Request headers (optional) |
 | `options.cookies` | `object` | Request cookies (optional) |
 | `options.requestId` | `string` | Custom request ID (optional) |
@@ -1063,6 +1110,8 @@ Destroy Server instance, remove all listeners.
 ## React Hooks
 
 request-iframe provides React hooks for easy integration in React applications. Import hooks from `request-iframe/react`:
+
+> Note: React is only required if you use `request-iframe/react`. Installing `request-iframe` alone does not require React.
 
 ```typescript
 import { useClient, useServer, useServerHandler, useServerHandlerMap } from 'request-iframe/react';
@@ -1328,8 +1377,12 @@ const IframeComponent = () => {
 | `PROTOCOL_UNSUPPORTED` | Protocol version not supported |
 | `IFRAME_NOT_READY` | iframe not ready |
 | `STREAM_ERROR` | Stream transfer error |
+| `STREAM_TIMEOUT` | Stream idle timeout |
+| `STREAM_EXPIRED` | Stream expired (writable stream lifetime exceeded) |
 | `STREAM_CANCELLED` | Stream cancelled |
 | `STREAM_NOT_BOUND` | Stream not bound to request context |
+| `STREAM_START_TIMEOUT` | Stream start timeout (request body stream_start not received in time) |
+| `TOO_MANY_REQUESTS` | Too many concurrent requests (server-side limit) |
 
 ### Error Handling Example
 

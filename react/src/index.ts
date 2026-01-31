@@ -7,7 +7,7 @@ import {
   type RequestIframeServer,
   type RequestIframeServerOptions,
   type ServerHandler
-} from '../..';
+} from 'request-iframe';
 
 /**
  * React hook for using request-iframe client

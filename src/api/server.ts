@@ -32,7 +32,10 @@ export function requestIframeServer(
     secretKey,
     id,
     ackTimeout: options?.ackTimeout,
-    autoOpen: options?.autoOpen
+    autoOpen: options?.autoOpen,
+    allowedOrigins: options?.allowedOrigins,
+    validateOrigin: options?.validateOrigin,
+    maxConcurrentRequestsPerClient: options?.maxConcurrentRequestsPerClient
   });
 
   // If trace mode is enabled, register debug listeners

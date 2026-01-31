@@ -3,6 +3,9 @@ module.exports = {
   testEnvironment: 'jsdom',
   roots: ['<rootDir>/src', '<rootDir>/react/src'],
   testMatch: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx', '**/?(*.)+(spec|test).ts', '**/?(*.)+(spec|test).tsx'],
+  testPathIgnorePatterns: [
+    '<rootDir>/src/__tests__/test-utils/'
+  ],
   collectCoverageFrom: [
     'src/**/*.ts',
     'react/src/**/*.ts',
@@ -27,6 +30,9 @@ module.exports = {
     }
   },
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
+  moduleNameMapper: {
+    '^request-iframe$': '<rootDir>/src/index.ts'
+  },
   transform: {
     '^.+\\.ts$': 'ts-jest',
     '^.+\\.tsx$': 'ts-jest'

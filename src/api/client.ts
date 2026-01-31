@@ -35,6 +35,11 @@ export function requestIframeClient(
     targetOrigin = '*';
   }
 
+  // Allow user to override targetOrigin explicitly
+  if (options?.targetOrigin) {
+    targetOrigin = options.targetOrigin;
+  }
+
   // Determine secretKey
   const secretKey = options?.secretKey;
   
@@ -55,7 +60,9 @@ export function requestIframeClient(
     timeout: options?.timeout,
     asyncTimeout: options?.asyncTimeout,
     returnData: options?.returnData,
-    headers: options?.headers
+    headers: options?.headers,
+    allowedOrigins: options?.allowedOrigins,
+    validateOrigin: options?.validateOrigin
   }, instanceId);
 
   // If trace mode is enabled, register debug interceptors

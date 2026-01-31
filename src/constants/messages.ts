@@ -35,6 +35,7 @@ const defaultMessages = {
   NO_RESPONSE_SENT: 'Handler completed but no response sent',
   MIDDLEWARE_ERROR: 'Middleware error',
   ERROR: 'Error',
+  TOO_MANY_REQUESTS: 'Too many concurrent requests (limit: {0})',
 
   /** Client errors */
   IFRAME_NOT_READY: 'iframe.contentWindow is not available',
@@ -49,8 +50,12 @@ const defaultMessages = {
   STREAM_ALREADY_STARTED: 'Stream has already started',
   STREAM_CANCELLED: 'Stream was cancelled: {0}',
   STREAM_ERROR: 'Stream error: {0}',
+  STREAM_TIMEOUT: 'Stream idle timeout after {0}ms',
+  STREAM_EXPIRED: 'Stream expired after {0}ms',
+  STREAM_START_TIMEOUT: 'Stream start timeout after {0}ms',
   STREAM_ENDED: 'Stream has ended',
   STREAM_READ_ERROR: 'Failed to read stream data',
+  STREAM_WRITE_ONLY_IN_PUSH_MODE: 'Stream write() is only available when mode is "push"',
 
   /** Debug messages - Client */
   DEBUG_CLIENT_REQUEST_START: '📤 [Client] Request Start',

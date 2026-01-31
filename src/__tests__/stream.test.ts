@@ -19,6 +19,7 @@ describe('Stream', () => {
     let mockPostMessage: jest.Mock;
     /** Mock channel: only send() is used by WritableStream */
     let mockChannel: MessageChannel;
+    let controlHandlers: Map<string, (data: any) => void>;
 
     beforeEach(() => {
       mockPostMessage = jest.fn();
@@ -31,6 +32,7 @@ describe('Stream', () => {
           return true;
         }
       } as unknown as MessageChannel;
+      controlHandlers = new Map();
     });
 
     it('should create stream with default options', () => {
@@ -80,10 +82,19 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      // Receiver grants credit (pull protocol)
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 10 });
+      await startPromise;
 
       expect(stream.state).toBe('ended');
       // start + 3 data chunks + end = 5 calls
@@ -124,10 +135,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await expect(stream.start()).rejects.toThrow('Stream was cancelled');
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 10 });
+      await expect(startPromise).rejects.toThrow('Stream was cancelled');
       expect(stream.state).toBe('cancelled');
       expect(streamDataCount).toBe(1);
     });
@@ -152,10 +171,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 10 });
+      await startPromise;
 
       expect(stream.state).toBe('ended');
       // start + 3 data chunks + end = 5 calls
@@ -170,10 +197,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 1 });
+      await startPromise;
 
       expect(stream.state).toBe('ended');
       expect(mockPostMessage).toHaveBeenCalledTimes(2); // start + end
@@ -192,10 +227,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 10 });
+      await startPromise;
 
       expect(stream.state).toBe('error');
       const errorCall = mockPostMessage.mock.calls.find((call: any[]) => 
@@ -216,10 +259,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 1 });
+      await startPromise;
 
       expect(stream.state).toBe('error');
     });
@@ -276,10 +327,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 1 });
+      await startPromise;
 
       expect(mockChannel.send).toHaveBeenCalled();
       expect(mockPostMessage).not.toHaveBeenCalled();
@@ -322,10 +381,18 @@ describe('Stream', () => {
         targetWindow: mockTargetWindow,
         targetOrigin: 'https://example.com',
         secretKey: 'test',
-        channel: mockChannel
+        channel: mockChannel,
+        registerStreamHandler: (streamId: string, handler: any) => {
+          controlHandlers.set(streamId, handler);
+        },
+        unregisterStreamHandler: (streamId: string) => {
+          controlHandlers.delete(streamId);
+        }
       });
 
-      await stream.start();
+      const startPromise = stream.start();
+      controlHandlers.get(stream.streamId)?.({ streamId: stream.streamId, type: 'pull', credit: 10 });
+      await startPromise;
 
       expect(stream.state).toBe('error');
       const errorCall = mockPostMessage.mock.calls.find(

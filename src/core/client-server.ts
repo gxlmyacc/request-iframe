@@ -1,4 +1,4 @@
-import { PostMessageData } from '../types';
+import type { PostMessageData } from '../types';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
 import { getOrCreateMessageChannel, releaseMessageChannel } from '../utils/cache';
 import { isCompatibleVersion } from '../utils';
@@ -25,6 +25,7 @@ interface PendingRequest {
   resolve: (data: PostMessageData) => void;
   reject: (error: Error) => void;
   origin?: string;
+  originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
 }
 
 /**
@@ -179,6 +180,15 @@ export class RequestIframeClientServer {
       )
     );
 
+    // Handle PING messages (server -> client heartbeat)
+    this.unregisterFns.push(
+      this.dispatcher.registerHandler(
+        MessageType.PING,
+        this.handlePing.bind(this),
+        handlerOptions
+      )
+    );
+
     // Handle stream_start messages (route to handleClientResponse so it reaches send callback)
     // Note: stream_start is handled in send callback, not through streamCallback
     this.unregisterFns.push(
@@ -197,6 +207,19 @@ export class RequestIframeClientServer {
         handlerOptions
       )
     );
+  }
+
+  private handlePing(data: PostMessageData, context: MessageContext): void {
+    if (!context.source) return;
+    // Mark accepted so MessageDispatcher can auto-send ACK when requireAck === true
+    if (!context.handledBy) {
+      context.accepted = true;
+      context.handledBy = 'client';
+    }
+    // Reply PONG
+    this.dispatcher.sendMessage(context.source, context.origin, MessageType.PONG, data.requestId, {
+      targetId: data.creatorId
+    });
   }
 
   /**
@@ -237,8 +260,27 @@ export class RequestIframeClientServer {
     }
     
     // Validate origin
-    if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
+    if (pending.originValidator) {
+      try {
+        if (!pending.originValidator(context.origin, data, context)) {
+          return;
+        }
+      } catch {
+        // If validator throws, treat as disallowed
+        return;
+      }
+    } else if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
       return;
+    }
+
+    /**
+     * Mark as handled so:
+     * - other client instances sharing the same channel won't also process it
+     * - MessageDispatcher can run its generalized requireAck auto-ack logic
+     */
+    if (!context.handledBy) {
+      context.accepted = true;
+      context.handledBy = 'client';
     }
     
     // ack, async, and stream_start don't delete pending (stream_start needs to keep pending for stream_data/stream_end)
@@ -270,8 +312,20 @@ export class RequestIframeClientServer {
   private handlePong(data: PostMessageData, context: MessageContext): void {
     const pending = this.pendingRequests.get(data.requestId);
     if (pending) {
-      if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
+      if (pending.originValidator) {
+        try {
+          if (!pending.originValidator(context.origin, data, context)) {
+            return;
+          }
+        } catch {
+          return;
+        }
+      } else if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
         return;
+      }
+      if (!context.handledBy) {
+        context.accepted = true;
+        context.handledBy = 'client';
       }
       this.pendingRequests.delete(data.requestId);
       pending.resolve(data);
@@ -318,9 +372,10 @@ export class RequestIframeClientServer {
     requestId: string,
     resolve: (data: PostMessageData) => void,
     reject: (error: Error) => void,
-    origin?: string
+    origin?: string,
+    originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean
   ): void {
-    this.pendingRequests.set(requestId, { resolve, reject, origin });
+    this.pendingRequests.set(requestId, { resolve, reject, origin, originValidator });
   }
 
   /**
