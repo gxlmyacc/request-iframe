@@ -820,10 +820,10 @@ server.on('/api/uploadStream', async (req, res) => {
 
 | Type | Description |
 |------|-------------|
-| `IframeWritableStream` | Server-side writable stream for sending regular data |
-| `IframeFileWritableStream` | Server-side file writable stream, automatically handles base64 encoding |
-| `IframeReadableStream` | Client-side readable stream for receiving regular data |
-| `IframeFileReadableStream` | Client-side file readable stream, automatically handles base64 decoding |
+| `IframeWritableStream` | Writer/producer stream: **created by whichever side is sending the stream** (server→client response stream, or client→server request stream) |
+| `IframeFileWritableStream` | File writer/producer stream (base64-encodes internally) |
+| `IframeReadableStream` | Reader/consumer stream for receiving regular data (regardless of which side sent it) |
+| `IframeFileReadableStream` | File reader/consumer stream (base64-decodes internally) |
 
 > **Note**: File streams are base64-encoded internally. Base64 introduces ~33% size overhead and can be memory/CPU heavy for very large files. For large files, prefer **chunked** file streams (`chunked: true`) and keep chunk sizes moderate (e.g. 256KB–1MB).
 

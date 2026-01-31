@@ -20,7 +20,11 @@ function generateStreamId(): string {
 
 /**
  * IframeWritableStream - Server-side writable stream
- * Used to send stream data to the client
+ *
+ * Writer/producer stream.
+ * It can be created on either side:
+ * - Server → Client: used as response stream (via `res.sendStream(stream)`)
+ * - Client → Server: used as request body stream (via `client.sendStream(path, stream)`)
  */
 export class IframeWritableStream
   extends IframeStreamCore<any>

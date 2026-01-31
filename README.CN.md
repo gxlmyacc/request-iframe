@@ -842,10 +842,10 @@ if (isIframeFileReadableStream(fileResponse.stream)) {
 
 | 类型 | 说明 |
 |------|------|
-| `IframeWritableStream` | 服务端可写流，用于发送普通数据 |
-| `IframeFileWritableStream` | 服务端文件可写流（文件流） |
-| `IframeReadableStream` | 客户端可读流，用于接收普通数据 |
-| `IframeFileReadableStream` | 客户端文件可读流（文件流） |
+| `IframeWritableStream` | 写侧（生产者）流：**谁要发送 stream，谁就创建它**；可用于 Server→Client 的响应流，也可用于 Client→Server 的请求流 |
+| `IframeFileWritableStream` | 文件写侧（生产者）流：用于发送文件（底层会做 Base64 编码） |
+| `IframeReadableStream` | 读侧（消费者）流：用于接收普通数据（无论来自 Server 还是 Client） |
+| `IframeFileReadableStream` | 文件读侧（消费者）流：用于接收文件（底层会做 Base64 解码） |
 
 > **注意**：文件流内部会进行 Base64 编/解码。Base64 会带来约 33% 的体积膨胀，并且在超大文件场景下可能会有较高的内存/CPU 开销。大文件建议使用 **分块** 文件流（`chunked: true`），并控制 chunk 大小（例如 256KB–1MB）。
 
