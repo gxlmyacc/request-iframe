@@ -1,6 +1,6 @@
 # request-iframe
 
-Communicate with iframes like sending HTTP requests! A cross-origin iframe communication library based on `postMessage`.
+Communicate with iframes/windows like sending HTTP requests! A cross-origin browser communication library based on `postMessage`.
 
 > 🌐 **Languages**: [English](./README.md) | [中文](./README.CN.md)
 
@@ -48,7 +48,7 @@ Communicate with iframes like sending HTTP requests! A cross-origin iframe commu
 
 ## Why request-iframe?
 
-In micro-frontend and iframe nesting scenarios, parent-child page communication is a common requirement. Traditional `postMessage` communication has the following pain points:
+In micro-frontend, iframe nesting, and popup window scenarios, cross-page communication is a common requirement. Traditional `postMessage` communication has the following pain points:
 
 | Pain Point | Traditional Way | request-iframe |
 |------------|----------------|----------------|
@@ -170,6 +170,29 @@ server.on('/event', (req, res) => {
   console.log('Component event:', req.body);
   res.send({ received: true });
 });
+```
+
+### Popup / New Window (Window Communication)
+
+`request-iframe` also works with a `Window` target (not only an iframe).
+
+**Important**: you must have a real `Window` reference (e.g. returned by `window.open()`, or available via `window.opener` / `event.source`). You cannot send to an arbitrary browser tab by URL.
+
+```typescript
+// Parent page: open a new tab/window
+const child = window.open('https://child.example.com/page.html', '_blank');
+if (!child) throw new Error('Popup blocked');
+
+// Parent -> child
+const client = requestIframeClient(child, {
+  secretKey: 'popup-demo',
+  targetOrigin: 'https://child.example.com' // strongly recommended (avoid '*')
+});
+await client.send('/api/ping', { from: 'parent' });
+
+// Child page: create server
+const server = requestIframeServer({ secretKey: 'popup-demo' });
+server.on('/api/ping', (req, res) => res.send({ ok: true, echo: req.body }));
 ```
 
 ### Cross-Origin Data Fetching
@@ -852,6 +875,11 @@ Create a Client instance.
 | `options.validateOrigin` | `(origin, data, context) => boolean` | Custom origin validator (optional, higher priority than `allowedOrigins`) |
 
 **Returns:** `RequestIframeClient`
+
+**Notes about `target: Window`:**
+- **You must have a `Window` reference** (e.g. from `window.open()`, `window.opener`, or `MessageEvent.source`).
+- You **cannot** communicate with an arbitrary browser tab by URL.
+- For security, prefer setting a strict `targetOrigin` and configure `allowedOrigins` / `validateOrigin`.
 
 ### requestIframeServer(options?)
 

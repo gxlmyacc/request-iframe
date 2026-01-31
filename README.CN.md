@@ -1,6 +1,6 @@
 # request-iframe
 
-像发送 HTTP 请求一样与 iframe 通信！基于 `postMessage` 实现的 iframe 跨域通信库。
+像发送 HTTP 请求一样与 iframe / Window 通信！基于 `postMessage` 实现的浏览器跨页面通信库。
 
 > 🌐 **Languages**: [English](./README.md) | [中文](./README.CN.md)
 
@@ -48,7 +48,7 @@
 
 ## 为什么选择 request-iframe？
 
-在微前端、iframe 嵌套等场景下，父子页面通信是常见需求。传统的 `postMessage` 通信存在以下痛点：
+在微前端、iframe 嵌套、弹窗（window.open）等场景下，跨页面通信是常见需求。传统的 `postMessage` 通信存在以下痛点：
 
 | 痛点 | 传统方式 | request-iframe |
 |------|----------|----------------|
@@ -284,6 +284,29 @@ server.on('/event', (req, res) => {
   console.log('组件事件:', req.body);
   res.send({ received: true });
 });
+```
+
+### 弹窗 / 新标签页（Window 通信）
+
+`request-iframe` 不仅可以与 iframe 通信，也可以把 `target` 直接传 `Window`（例如弹窗/新标签页）。
+
+**重要前提**：你必须拿到对方页面的 `Window` 引用（例如 `window.open()` 的返回值，或通过 `window.opener` / `MessageEvent.source` 获取）。**无法**通过 URL 给“任意标签页”发消息。
+
+```typescript
+// 父页面：打开新标签页/弹窗
+const child = window.open('https://child.example.com/page.html', '_blank');
+if (!child) throw new Error('弹窗被拦截');
+
+// 父 -> 子
+const client = requestIframeClient(child, {
+  secretKey: 'popup-demo',
+  targetOrigin: 'https://child.example.com' // 强烈建议不要用 '*'
+});
+await client.send('/api/ping', { from: 'parent' });
+
+// 子页面：创建 server
+const server = requestIframeServer({ secretKey: 'popup-demo' });
+server.on('/api/ping', (req, res) => res.send({ ok: true, echo: req.body }));
 ```
 
 ### 跨域数据获取
@@ -885,6 +908,11 @@ setMessages({
 | `options.validateOrigin` | `(origin, data, context) => boolean` | 自定义 origin 校验函数（可选，优先级高于 `allowedOrigins`） |
 
 **返回值：** `RequestIframeClient`
+
+**关于 `target: Window` 的说明：**
+- **必须持有对方页面的 `Window` 引用**（例如 `window.open()` 返回值、`window.opener`、或 `MessageEvent.source`）。
+- **无法**通过 URL 给“任意标签页”发消息。
+- 安全起见，建议显式设置 `targetOrigin`，并配置 `allowedOrigins` / `validateOrigin`。
 
 **示例：**
 
