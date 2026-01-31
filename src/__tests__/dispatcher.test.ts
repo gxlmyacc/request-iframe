@@ -331,6 +331,60 @@ describe('MessageDispatcher', () => {
       expect(handler1).toHaveBeenCalled();
       expect(handler2).not.toHaveBeenCalled();
     });
+
+    /** stream_data per-frame ACK is handled at stream routing layer, not by MessageDispatcher */
+  });
+
+  describe('auto-ack payload size limit', () => {
+    it('should fallback to {id} when echoed ack payload is too large', () => {
+      const postSpy = jest.spyOn(window, 'postMessage').mockImplementation();
+
+      dispatcher.registerHandler(MessageType.REQUEST, (_data, context) => {
+        context.accepted = true;
+        context.handledBy = 'instance-1';
+      });
+
+      const bigAck = { id: 'ack-1', meta: 'x'.repeat(6000) };
+      const message = createPostMessage(MessageType.REQUEST, 'req123', {
+        path: 'test',
+        role: MessageRole.SERVER,
+        requireAck: true,
+        ack: bigAck
+      } as any);
+
+      dispatcher['dispatchMessage'](message, mockContext);
+
+      const ackCall = postSpy.mock.calls.find((c) => (c[0] as any)?.type === MessageType.ACK);
+      expect(ackCall).toBeDefined();
+      expect((ackCall as any)[0].ack).toEqual({ id: 'ack-1' });
+
+      postSpy.mockRestore();
+    });
+
+    it('should respect configured maxMetaLength', () => {
+      const postSpy = jest.spyOn(window, 'postMessage').mockImplementation();
+
+      dispatcher.setAutoAckLimits({ maxMetaLength: 1 });
+      dispatcher.registerHandler(MessageType.REQUEST, (_data, context) => {
+        context.accepted = true;
+        context.handledBy = 'instance-1';
+      });
+
+      const message = createPostMessage(MessageType.REQUEST, 'req123', {
+        path: 'test',
+        role: MessageRole.SERVER,
+        requireAck: true,
+        ack: { id: 'ack-1', meta: 'xx' }
+      } as any);
+
+      dispatcher['dispatchMessage'](message, mockContext);
+
+      const ackCall = postSpy.mock.calls.find((c) => (c[0] as any)?.type === MessageType.ACK);
+      expect(ackCall).toBeDefined();
+      expect((ackCall as any)[0].ack).toEqual({ id: 'ack-1' });
+
+      postSpy.mockRestore();
+    });
   });
 
   describe('error handling', () => {

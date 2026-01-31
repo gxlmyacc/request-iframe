@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-build-pack:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - 18
+          - 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: yarn
+
+      - name: Enable Corepack (Yarn v1)
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Lint
+        if: matrix.node == 20
+        run: yarn lint
+
+      - name: Test
+        if: matrix.node == 18
+        run: yarn test
+
+      - name: Test (coverage)
+        if: matrix.node == 20
+        run: yarn test:coverage
+
+      - name: Upload coverage to Coveralls
+        if: matrix.node == 20
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: coverage/lcov.info
+
+      - name: Build
+        if: matrix.node == 20
+        run: yarn build
+
+      - name: Verify package artifacts
+        if: matrix.node == 20
+        run: node scripts/verify-package-artifacts.js
+

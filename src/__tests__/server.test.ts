@@ -30,6 +30,8 @@ function createMockWindow(): { postMessage: jest.Mock } & Window {
   // Create a mock window that extends the real window prototype
   const mockWindow = Object.create(window) as any;
   mockWindow.postMessage = mockPostMessage;
+  // Ensure isWindowAvailable() treats it as open
+  mockWindow.closed = false;
   return mockWindow;
 }
 
@@ -789,12 +791,12 @@ describe('RequestIframeServer', () => {
     });
   });
 
-  describe('received acknowledgment', () => {
-    it('should handle received acknowledgment', async () => {
+  describe('acknowledgment (ACK-only requireAck)', () => {
+    it('should resolve res.send(..., {requireAck:true}) on ACK', async () => {
       const server = requestIframeServer();
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
-      const mockWindow = createMockWindow();
+      const mockWindow: any = { postMessage: jest.fn() };
 
       let ackResolve: (value: boolean) => void;
       const ackPromise = new Promise<boolean>(resolve => {
@@ -813,8 +815,7 @@ describe('RequestIframeServer', () => {
             type: 'request',
             requestId: 'req123',
             path: 'test',
-            role: MessageRole.CLIENT,
-            targetId: server.id
+            role: MessageRole.CLIENT
           },
           origin,
           source: mockWindow
@@ -823,14 +824,20 @@ describe('RequestIframeServer', () => {
 
       await new Promise(resolve => setTimeout(resolve, 150));
 
-      // Send received acknowledgment
+      const responseMsg = (mockWindow.postMessage as jest.Mock).mock.calls
+        .map((call: any[]) => call[0])
+        .find((msg: any) => msg?.type === 'response');
+      expect(responseMsg).toBeDefined();
+
+      // Send ACK acknowledgment
       window.dispatchEvent(
         new MessageEvent('message', {
           data: {
             __requestIframe__: 1,
             timestamp: Date.now(),
-            type: 'received',
+            type: 'ack',
             requestId: 'req123',
+            ack: { id: responseMsg.ack.id },
             role: MessageRole.CLIENT
           },
           origin,

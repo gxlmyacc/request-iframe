@@ -227,7 +227,7 @@ function setupClientMessageDebugging(clientImpl: any): void {
         }));
       } else if (type === MessageType.PING) {
         log('info', Messages.DEBUG_CLIENT_SENDING_PING, { requestId });
-      } else if (type === MessageType.RECEIVED) {
+      } else if (type === MessageType.ACK) {
         log('info', Messages.DEBUG_CLIENT_SENDING_RECEIVED_ACK, { requestId });
       }
       

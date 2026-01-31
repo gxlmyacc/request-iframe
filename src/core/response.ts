@@ -1,16 +1,16 @@
 import { ServerResponse, CookieOptions, SendOptions, SendFileOptions } from '../types';
-import { createPostMessage, createSetCookie, createClearCookie, detectContentType, blobToBase64 } from '../utils';
+import { createPostMessage, createSetCookie, createClearCookie, detectContentType, blobToBase64, generateRequestId } from '../utils';
 import { MessageType, HttpStatus, HttpHeader, getStatusText, MessageRole, ErrorCode } from '../constants';
 import { IframeWritableStream, IframeFileWritableStream, isIframeWritableStream } from '../stream';
 import { MessageChannel } from '../message';
-import { isAckMetaEqual } from '../utils/ack-meta';
+import { isAckMatch } from '../utils/ack';
 
 
 
 /**
  * Callback waiting for client acknowledgment
  */
-type AckCallback = (received: boolean, ackMeta?: any) => void;
+type AckCallback = (received: boolean, ack?: any) => void;
 type OnSentCallback = () => void;
 
 /**
@@ -111,9 +111,9 @@ export class ServerResponseImpl implements ServerResponse {
   /**
    * Trigger client acknowledgment callback
    */
-  public _triggerAck(received: boolean, ackMeta?: any): void {
+  public _triggerAck(received: boolean, ack?: any): void {
     if (this.onAckCallback) {
-      this.onAckCallback(received, ackMeta);
+      this.onAckCallback(received, ack);
       this.onAckCallback = undefined;
     }
   }
@@ -146,7 +146,15 @@ export class ServerResponseImpl implements ServerResponse {
     this.markSent();
 
     const requireAck = options?.requireAck ?? false;
-    const expectedAckMeta = options?.ackMeta;
+    /**
+     * When requireAck is enabled, attach a unique ack payload by default so ACK can be
+     * unambiguously associated with this send.
+     *
+     * NOTE: ack is an internal reserved field (not part of public API).
+     */
+    const expectedAck =
+      (options as any)?.ack ??
+      (requireAck ? { id: generateRequestId() } : undefined);
 
     try {
       // If acknowledgment not required, send directly and return true
@@ -176,7 +184,7 @@ export class ServerResponseImpl implements ServerResponse {
               resolve(false);
               return;
             }
-            if (expectedAckMeta !== undefined && !isAckMetaEqual(expectedAckMeta, receivedAckMeta)) {
+            if (expectedAck !== undefined && !isAckMatch(expectedAck, (receivedAckMeta as any))) {
               resolve(false);
               return;
             }
@@ -192,7 +200,7 @@ export class ServerResponseImpl implements ServerResponse {
               statusText: getStatusText(this.statusCode),
               headers: this.headers,
               requireAck: true,
-              ackMeta: expectedAckMeta,
+              ack: expectedAck,
               role: MessageRole.SERVER,
               creatorId: this.serverId,
               targetId: this.targetId

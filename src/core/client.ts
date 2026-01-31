@@ -12,7 +12,7 @@ import type {
   OriginValidator
 } from '../types';
 import { RequestIframeError } from '../utils';
-import { isAckMetaEqual } from '../utils/ack-meta';
+import { isAckMatch } from '../utils/ack';
 import { detectContentType, blobToBase64, isWindowAvailable, matchOrigin } from '../utils';
 import {
   generateRequestId,
@@ -30,6 +30,7 @@ import {
   DefaultTimeout,
   ErrorCode,
   MessageType,
+  OriginConstant,
   HttpStatus,
   HttpStatusText,
   HttpHeader,
@@ -183,7 +184,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         } catch {
           return;
         }
-      } else if (this.targetOrigin !== '*' && context.origin !== this.targetOrigin) {
+      } else if (this.targetOrigin !== OriginConstant.ANY && context.origin !== this.targetOrigin) {
         return;
       }
     }
@@ -488,7 +489,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       asyncTimeout = this.defaultAsyncTimeout,
       requireAck = true,
       streamTimeout,
-      ackMeta,
+        ack,
       returnData = this.defaultReturnData
     } = processedConfig;
 
@@ -572,8 +573,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
 
           // Received ACK: server has received request
           if (data.type === MessageType.ACK) {
-            // Optional ackMeta match (ignore mismatched ACK)
-            if (ackMeta !== undefined && !isAckMetaEqual(ackMeta, (data as any).ackMeta)) {
+            // Optional ack match (ignore mismatched ACK)
+            if (ack !== undefined && !isAckMatch(ack, (data as any).ack)) {
               return;
             }
             // Remember server's creatorId as target server ID for future requests
@@ -811,7 +812,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
         cookies: mergedCookies,
         targetId,
         requireAck,
-        ackMeta
+        ack
       };
       if (extraPayload?.streamId) {
         payload.streamId = extraPayload.streamId;

@@ -47,7 +47,8 @@ describe('requestIframe - Middleware', () => {
             requestId: requestId1,
             path: 'test',
             body: {},
-            headers: {}
+            headers: {},
+            requireAck: true
           },
           origin,
           source: mockContentWindow as any
@@ -80,7 +81,8 @@ describe('requestIframe - Middleware', () => {
             requestId: requestId2,
             path: 'test',
             body: {},
-            headers: { authorization: 'Bearer token123' }
+            headers: { authorization: 'Bearer token123' },
+            requireAck: true
           },
           origin,
           source: mockContentWindow as any

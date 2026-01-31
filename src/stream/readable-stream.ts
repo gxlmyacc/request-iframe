@@ -133,7 +133,6 @@ export class IframeReadableStream<T = any>
         this.handleCancel(data.reason);
         break;
       case StreamInternalMessageType.PULL:
-      case StreamInternalMessageType.ACK:
         // Control messages for writer side; ignore in readable stream
         break;
     }
@@ -150,16 +149,6 @@ export class IframeReadableStream<T = any>
     this.chunks.push(decoded);
     this.emit(StreamEvent.DATA, { chunk: decoded, done, seq });
     this.emit(StreamEvent.STATE, { state: this._state });
-
-    // Ack this chunk (if seq provided)
-    if (typeof seq === 'number' && seq >= 0) {
-      try {
-        this.postControl(MessageType.STREAM_ACK as any, { seq });
-        this.emit(StreamEvent.ACK, { seq });
-      } catch {
-        /** ignore */
-      }
-    }
     this.notifyWaiters();
     this.schedulePullIfNeeded();
     

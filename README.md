@@ -8,7 +8,7 @@ Communicate with iframes/windows like sending HTTP requests! A cross-origin brow
   <img src="https://img.shields.io/badge/TypeScript-Ready-blue" alt="TypeScript Ready">
   <img src="https://img.shields.io/badge/API-Express%20Like-green" alt="Express Like API">
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="MIT License">
-  <img src="https://img.shields.io/badge/Test%20Coverage-76%25-brightgreen" alt="Test Coverage">
+  <img src="https://coveralls.io/repos/github/gxlmyacc/request-iframe/badge.svg?branch=main" alt="Coverage Status">
 </p>
 
 ## 📑 Table of Contents
@@ -260,7 +260,7 @@ request-iframe implements an HTTP-like communication protocol on top of `postMes
        │                                          │
        │  <──── RESPONSE ──────────────────────  │  Return result
        │                                          │
-       │  ──── RECEIVED (optional) ────────────>  │  Acknowledge receipt of response/error (controlled by response `requireAck`)
+       │  ──── ACK (optional) ─────────────────>  │  Acknowledge receipt of response/error (ACK-only requireAck)
        │                                          │
 ```
 
@@ -269,15 +269,13 @@ request-iframe implements an HTTP-like communication protocol on top of `postMes
 | Type | Direction | Description |
 |------|-----------|-------------|
 | `request` | Client → Server | Client initiates request |
-| `ack` | Server → Client | Server acknowledges receipt of request (when request `requireAck` is enabled) |
+| `ack` | Receiver → Sender | Acknowledgment when `requireAck: true` and the message is accepted/handled (ACK-only) |
 | `async` | Server → Client | Notifies client this is an async task (sent when handler returns Promise) |
 | `response` | Server → Client | Returns response data |
 | `error` | Server → Client | Returns error information |
-| `received` | Client → Server | Client acknowledges receipt of response/error (optional, controlled by response `requireAck`) |
 | `ping` | Client → Server | Connection detection (`isConnect()` method, may use `requireAck` to confirm delivery) |
 | `pong` | Server → Client | Connection detection response |
 | `stream_pull` | Receiver → Sender | Stream pull: receiver requests next chunks (pull/ack protocol) |
-| `stream_ack` | Receiver → Sender | Stream ack: receiver acknowledges a chunk (pull/ack protocol) |
 
 ### Timeout Mechanism
 
@@ -828,13 +826,15 @@ server.on('/api/uploadStream', async (req, res) => {
 > **Note**: File streams are base64-encoded internally. Base64 introduces ~33% size overhead and can be memory/CPU heavy for very large files. For large files, prefer **chunked** file streams (`chunked: true`) and keep chunk sizes moderate (e.g. 256KB–1MB).
 
 **Stream timeouts:**
-- `options.streamTimeout` (request option): client-side stream idle timeout while consuming `response.stream` (data/file streams). When triggered, the client will attempt a heartbeat check and fail the stream if the connection is not alive.
+- `options.streamTimeout` (request option): client-side stream idle timeout while consuming `response.stream` (data/file streams). When triggered, the client performs a heartbeat check (by default `client.isConnect()`); if not alive, the stream fails as disconnected.
 - `expireTimeout` (writable stream option): writer-side stream lifetime. When expired, the writer sends `stream_error` and the reader will fail the stream with `STREAM_EXPIRED`.
-- `streamTimeout` (writable stream option): writer-side idle timeout. If the writer does not receive `stream_pull/stream_ack` for a long time, it will heartbeat-check and fail to avoid wasting resources.
+- `streamTimeout` (writable stream option): writer-side idle timeout. If the writer does not receive `stream_pull` for a long time, it will heartbeat-check and fail to avoid wasting resources.
+- `maxPendingChunks` (writable stream option): max number of pending (unsent) chunks kept in memory on the writer side (optional). Important for long-lived `push` streams: if the receiver stops pulling, continued `write()` calls will accumulate in the writer queue.
+- `maxPendingBytes` (writable stream option): max bytes of pending (unsent) chunks kept in memory on the writer side (optional). Useful when a single `write()` may enqueue a very large chunk.
 
 **Pull/Ack protocol (default):**
-- Reader automatically sends `stream_pull` to request chunks and sends `stream_ack` for each received chunk.
 - Writer only sends `stream_data` when it has received `stream_pull`, enabling real backpressure.
+  - Disconnect detection does not rely on `stream_ack`, but uses `streamTimeout + heartbeat(isConnect)`.
 
 **consume default change:**
 - `for await (const chunk of response.stream)` defaults to **consume and drop** already iterated chunks (`consume: true`) to prevent unbounded memory growth for long streams.
@@ -858,9 +858,9 @@ Server can require Client to acknowledge receipt of response:
 ```typescript
 server.on('/api/important', async (req, res) => {
   // requireAck: true means client needs to acknowledge
-  const received = await res.send(data, { requireAck: true });
+  const acked = await res.send(data, { requireAck: true });
   
-  if (received) {
+  if (acked) {
     console.log('Client acknowledged receipt');
   } else {
     console.log('Client did not acknowledge (timeout)');
@@ -868,7 +868,7 @@ server.on('/api/important', async (req, res) => {
 });
 ```
 
-> **Note**: Client acknowledgment (`received`) is sent automatically by the library when the response/error is accepted by the client (i.e., there is a matching pending request). You don't need to manually send `received`.
+> **Note**: Client acknowledgment (`ack`) is sent automatically by the library when the response/error is accepted by the client (i.e., there is a matching pending request). You don't need to manually send `ack`.
 
 ### Trace Mode
 
@@ -937,6 +937,65 @@ Create a Client instance.
 - **You must have a `Window` reference** (e.g. from `window.open()`, `window.opener`, or `MessageEvent.source`).
 - You **cannot** communicate with an arbitrary browser tab by URL.
 - For security, prefer setting a strict `targetOrigin` and configure `allowedOrigins` / `validateOrigin`.
+
+**Production configuration template:**
+
+```typescript
+import { requestIframeClient, requestIframeServer } from 'request-iframe';
+
+/**
+ * Recommended: explicitly constrain 3 things
+ * - secretKey: isolate different apps/instances (avoid cross-talk)
+ * - targetOrigin: postMessage targetOrigin (strongly avoid '*' for Window targets)
+ * - allowedOrigins / validateOrigin: incoming origin allowlist validation
+ */
+const secretKey = 'my-app';
+const targetOrigin = 'https://child.example.com';
+const allowedOrigins = [targetOrigin];
+
+// Client (parent)
+const client = requestIframeClient(window.open(targetOrigin)!, {
+  secretKey,
+  targetOrigin,
+  allowedOrigins
+});
+
+// Server (child/iframe)
+const server = requestIframeServer({
+  secretKey,
+  allowedOrigins,
+  // Mitigate message explosion (tune as needed)
+  maxConcurrentRequestsPerClient: 50
+});
+```
+
+**Production configuration template (iframe target):**
+
+```typescript
+import { requestIframeClient, requestIframeServer } from 'request-iframe';
+
+/**
+ * For iframe targets, you can derive targetOrigin from iframe.src, and use it as the allowedOrigins allowlist.
+ */
+const iframe = document.querySelector('iframe')!;
+const targetOrigin = new URL(iframe.src).origin;
+const secretKey = 'my-app';
+
+// Client (parent)
+const client = requestIframeClient(iframe, {
+  secretKey,
+  // Explicitly set it (even though the library can derive it) to avoid accidentally using '*'
+  targetOrigin,
+  allowedOrigins: [targetOrigin]
+});
+
+// Server (inside iframe)
+const server = requestIframeServer({
+  secretKey,
+  allowedOrigins: [targetOrigin],
+  maxConcurrentRequestsPerClient: 50
+});
+```
 
 ### requestIframeServer(options?)
 

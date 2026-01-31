@@ -15,10 +15,18 @@ function createBoundContext(options?: {
 
   const mockTargetWindow: Window = { postMessage: jest.fn() } as any;
 
+  const receivers: Array<(data: any, ctx: any) => void> = [];
   const channel: MessageChannel = {
     send: (target: any, message: any, origin: string) => {
       posted.push({ target, message, origin });
       return sendOk;
+    },
+    addReceiver: (receiver: any) => {
+      receivers.push(receiver);
+    },
+    removeReceiver: (receiver: any) => {
+      const idx = receivers.indexOf(receiver);
+      if (idx >= 0) receivers.splice(idx, 1);
     }
   } as any;
 
@@ -38,7 +46,7 @@ function createBoundContext(options?: {
     heartbeat: options?.heartbeat
   };
 
-  return { ctx, posted, controlHandlers };
+  return { ctx, posted, controlHandlers, receivers };
 }
 
 async function flushMicrotasks(times: number = 3): Promise<void> {
@@ -89,7 +97,7 @@ describe('stream/writable-stream (IframeWritableStream) - branch focused', () =>
     expect(startMsg2?.creatorId).toBe('client-1');
   });
 
-  it('handleControlMessage should cover ACK/default branches and CANCEL branch', async () => {
+  it('handleControlMessage should cover default and CANCEL branches', async () => {
     const ws = new IframeWritableStream();
     const { ctx, controlHandlers } = createBoundContext();
     ws._bind(ctx);
@@ -97,8 +105,6 @@ describe('stream/writable-stream (IframeWritableStream) - branch focused', () =>
 
     // unknown type -> default branch
     controlHandlers.get(ws.streamId)?.({ streamId: ws.streamId, type: 'unknown' });
-    // ACK -> no-op branch
-    controlHandlers.get(ws.streamId)?.({ streamId: ws.streamId, type: StreamInternalMessageType.ACK, seq: 0 });
     // CANCEL -> triggers cancel branch
     controlHandlers.get(ws.streamId)?.({ streamId: ws.streamId, type: StreamInternalMessageType.CANCEL, reason: 'bye' });
 
@@ -121,6 +127,65 @@ describe('stream/writable-stream (IframeWritableStream) - branch focused', () =>
     const { ctx } = createBoundContext();
     ws._bind(ctx);
     expect(() => ws.write('x')).toThrow(Messages.STREAM_NOT_BOUND);
+  });
+
+  it('push mode: write() should throw when pending queue exceeds maxPendingChunks', async () => {
+    const ws = new IframeWritableStream({ mode: StreamModeConstant.PUSH, maxPendingChunks: 1 });
+    const { ctx } = createBoundContext();
+    ws._bind(ctx);
+    void ws.start();
+
+    // No pull credit granted => pendingQueue will not be flushed
+    ws.write('a');
+    expect(() => ws.write('b')).toThrow('Stream pending queue overflow');
+  });
+
+  it('push mode: write() should throw when pending bytes exceeds maxPendingBytes', async () => {
+    const ws = new IframeWritableStream({ mode: StreamModeConstant.PUSH, maxPendingBytes: 2 });
+    const { ctx } = createBoundContext();
+    ws._bind(ctx);
+    void ws.start();
+
+    // No pull credit => pending buffer accumulates
+    ws.write('aa'); // ~2 bytes
+    expect(() => ws.write('b')).toThrow('Stream pending bytes overflow');
+  });
+
+  it('push mode: write({requireAck:true}) should resolve true when ACK received', async () => {
+    jest.useFakeTimers();
+    const ws = new IframeWritableStream({ mode: StreamModeConstant.PUSH });
+    const { ctx, controlHandlers, posted, receivers } = createBoundContext();
+    ws._bind(ctx);
+    void ws.start();
+
+    // Grant 1 credit so a single write can be flushed
+    controlHandlers.get(ws.streamId)?.({ streamId: ws.streamId, type: StreamInternalMessageType.PULL, credit: 1 });
+
+    const p = ws.write('x', { requireAck: true, ackTimeout: 100 });
+    await flushMicrotasks();
+
+    const dataMsg = posted.find((x) => x.message?.type === MessageType.STREAM_DATA)?.message;
+    expect(dataMsg).toBeDefined();
+
+    // Simulate receiver auto-ack (MessageDispatcher would send this in real usage)
+    receivers.forEach((r) => r({ type: MessageType.ACK, requestId: dataMsg.requestId }, { origin: 'https://example.com' }));
+
+    await expect(p).resolves.toBe(true);
+  });
+
+  it('push mode: write({requireAck:true}) should resolve false on timeout', async () => {
+    jest.useFakeTimers();
+    const ws = new IframeWritableStream({ mode: StreamModeConstant.PUSH });
+    const { ctx, controlHandlers } = createBoundContext();
+    ws._bind(ctx);
+    void ws.start();
+
+    controlHandlers.get(ws.streamId)?.({ streamId: ws.streamId, type: StreamInternalMessageType.PULL, credit: 1 });
+    const p = ws.write('x', { requireAck: true, ackTimeout: 50 });
+    await flushMicrotasks();
+
+    jest.advanceTimersByTime(50);
+    await expect(p).resolves.toBe(false);
   });
 
   it('push mode: write() should throw STREAM_ENDED after end', async () => {

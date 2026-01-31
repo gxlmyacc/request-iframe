@@ -1,6 +1,9 @@
 node_modules/
 library/
 esm/
+react/library/
+react/esm/
+coverage/
 *.log
 .DS_Store
 .vscode/

@@ -1,8 +1,9 @@
-import { MessageRole, MessageRoleValue, MessageType } from '../constants';
+import { AutoAckConstant, MessageRole, MessageRoleValue, MessageType, OriginConstant } from '../constants';
 import {
   PostMessageData
 } from '../types';
 import { getProtocolVersion, createPostMessage } from '../utils';
+import { getAckId, getAckMeta } from '../utils/ack';
 import { MessageChannel, type MessageContext } from './channel';
 
 /**
@@ -80,6 +81,8 @@ export class MessageDispatcher {
   
   /** Underlying message channel */
   private readonly channel: MessageChannel;
+  private autoAckMaxMetaLength: number = AutoAckConstant.MAX_META_LENGTH;
+  private autoAckMaxIdLength: number = AutoAckConstant.MAX_ID_LENGTH;
 
   /**
    * Fallback target for sending auto-ack messages when MessageEvent.source is unavailable.
@@ -87,7 +90,7 @@ export class MessageDispatcher {
    * - This is primarily used for unit tests or edge environments that synthesize MessageEvent without `source`.
    */
   private fallbackTargetWindow?: Window;
-  private fallbackTargetOrigin: string = '*';
+  private fallbackTargetOrigin: string = OriginConstant.ANY;
   
   /** Message handler list */
   private readonly handlers: MessageHandlerEntry[] = [];
@@ -117,9 +120,24 @@ export class MessageDispatcher {
   /**
    * Set fallback target for outgoing auto-ack messages.
    */
-  public setFallbackTarget(targetWindow: Window, targetOrigin: string = '*'): void {
+  public setFallbackTarget(targetWindow: Window, targetOrigin: string = OriginConstant.ANY): void {
     this.fallbackTargetWindow = targetWindow;
     this.fallbackTargetOrigin = targetOrigin;
+  }
+
+  /**
+   * Configure auto-ack echo limits (advanced/internal).
+   *
+   * @internal
+   */
+  public setAutoAckLimits(limits: { maxMetaLength?: number; maxIdLength?: number }): void {
+    if (!limits || typeof limits !== 'object') return;
+    if (typeof limits.maxMetaLength === 'number' && Number.isFinite(limits.maxMetaLength) && limits.maxMetaLength >= 0) {
+      this.autoAckMaxMetaLength = limits.maxMetaLength;
+    }
+    if (typeof limits.maxIdLength === 'number' && Number.isFinite(limits.maxIdLength) && limits.maxIdLength >= 0) {
+      this.autoAckMaxIdLength = limits.maxIdLength;
+    }
   }
 
   // ==================== Reference Counting ====================
@@ -300,16 +318,21 @@ export class MessageDispatcher {
     const type = data.type as string;
 
     // Don't auto-ack ack messages (avoid loops)
-    if (type === MessageType.ACK || type === MessageType.RECEIVED) return;
+    if (type === MessageType.ACK) return;
 
-    const shouldAckRequest = type === MessageType.REQUEST && data.requireAck !== false;
-    const shouldAckPing = type === MessageType.PING && data.requireAck === true;
-    const shouldAckResponse =
-      (type === MessageType.RESPONSE || type === MessageType.ERROR) &&
-      data.requireAck === true;
-
-    if ((shouldAckRequest || shouldAckPing) && context.accepted === true) {
-      // Delivery acknowledgment for request/ping
+    /**
+     * ACK-only requireAck workflow (no compatibility guarantees):
+     * - For any message with `requireAck === true`, once the message is accepted/handled
+     *   (via `context.accepted === true` + `context.handledBy` setter hook),
+     *   we reply with `ack`.
+     *
+     * This unifies:
+     * - request delivery confirmation
+     * - response receipt confirmation
+     * - stream frame delivery confirmation (e.g. stream_data per-frame ack)
+     */
+    if (data.requireAck === true && context.accepted === true) {
+      const ack = this.getAutoAckEchoPayload((data as any).ack);
       this.sendMessage(
         targetWindow,
         targetOrigin,
@@ -318,26 +341,28 @@ export class MessageDispatcher {
         {
           path: data.path,
           targetId: data.creatorId,
-          ackMeta: data.ackMeta
+          ack
         }
       );
-      return;
     }
+  }
 
-    if (shouldAckResponse && context.accepted === true) {
-      // Receipt acknowledgment for response/error
-      this.sendMessage(
-        targetWindow,
-        targetOrigin,
-        MessageType.RECEIVED,
-        data.requestId,
-        {
-          path: data.path,
-          targetId: data.creatorId,
-          ackMeta: data.ackMeta
-        }
-      );
-    }
+  /**
+   * Limit echoed ack payload size for auto-ack replies.
+   *
+   * We only echo a fixed shape `{ id, meta?: string }`:
+   * - If meta is too long, we drop meta and only echo `{ id }`.
+   * - If id is missing or too long, omit `ack` field.
+   */
+  private getAutoAckEchoPayload(rawAck: any): any {
+    if (rawAck === undefined) return undefined;
+    const id = getAckId(rawAck);
+    if (id === undefined) return undefined;
+    if (typeof id === 'string' && id.length > this.autoAckMaxIdLength) return undefined;
+    const meta = getAckMeta(rawAck);
+    if (meta === undefined) return { id };
+    if (meta.length > this.autoAckMaxMetaLength) return { id };
+    return { id, meta };
   }
 
   /**
@@ -364,7 +389,7 @@ export class MessageDispatcher {
    * @param message message data (already formatted as PostMessageData)
    * @param targetOrigin target origin (defaults to '*')
    */
-  public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): boolean {
+  public send(target: Window, message: PostMessageData, targetOrigin: string = OriginConstant.ANY): boolean {
     // Automatically set role and creatorId if not already set (for backward compatibility)
     if (message.role === undefined) {
       message.role = this.role;

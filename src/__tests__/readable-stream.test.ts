@@ -61,7 +61,7 @@ describe('stream/readable-stream (IframeReadableStream)', () => {
     await expect(rs3.read()).resolves.toEqual(['a', 'b']);
   });
 
-  it('should ACK data chunks when seq is provided', async () => {
+  it('should not ACK data chunks by default (ack is not required for pull/backpressure)', async () => {
     const mh = createMockHandler();
     const rs = new IframeReadableStream('sid', 'rid', mh as any);
     mh.posted.length = 0;
@@ -69,7 +69,7 @@ describe('stream/readable-stream (IframeReadableStream)', () => {
     mh.emit('sid', { streamId: 'sid', type: StreamInternalMessageType.DATA, data: 'x', seq: 0, done: true });
     await flushMicrotasks();
 
-    expect(mh.posted.some((m) => m?.type === MessageType.STREAM_ACK)).toBe(true);
+    expect(mh.posted.some((m) => m?.type === MessageType.STREAM_ACK)).toBe(false);
     await expect(rs.read()).resolves.toBe('x');
   });
 
@@ -77,7 +77,6 @@ describe('stream/readable-stream (IframeReadableStream)', () => {
     const mh = createMockHandler();
     const rs = new IframeReadableStream('sid', 'rid', mh as any);
     mh.emit('sid', { streamId: 'sid', type: StreamInternalMessageType.PULL, credit: 1 });
-    mh.emit('sid', { streamId: 'sid', type: StreamInternalMessageType.ACK, seq: 0 });
     mh.emit('sid', { streamId: 'sid', type: StreamInternalMessageType.END });
     await expect(rs.readAll()).resolves.toEqual([]);
   });

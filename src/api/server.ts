@@ -35,7 +35,9 @@ export function requestIframeServer(
     autoOpen: options?.autoOpen,
     allowedOrigins: options?.allowedOrigins,
     validateOrigin: options?.validateOrigin,
-    maxConcurrentRequestsPerClient: options?.maxConcurrentRequestsPerClient
+    maxConcurrentRequestsPerClient: options?.maxConcurrentRequestsPerClient,
+    autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
+    autoAckMaxIdLength: options?.autoAckMaxIdLength
   });
 
   // If trace mode is enabled, register debug listeners

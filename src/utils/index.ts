@@ -1,3 +1,5 @@
+import { OriginConstant } from '../constants';
+
 /**
  * Generate unique request ID
  */
@@ -17,12 +19,12 @@ export function generateInstanceId(): string {
  */
 export function getIframeTargetOrigin(iframe: HTMLIFrameElement): string {
   if (!iframe.src) {
-    return '*';
+    return OriginConstant.ANY;
   }
   try {
     return new URL(iframe.src).origin;
   } catch (e) {
-    return '*';
+    return OriginConstant.ANY;
   }
 }
 
@@ -80,7 +82,7 @@ export * from './path-match';
 // Export origin matching functions
 export * from './origin';
 
-// ackMeta is a reserved protocol field (internal). Do not export helpers publicly.
+// ack is a reserved protocol field (internal). Do not export helpers publicly.
 
 // Export Cookie-related functions
 export * from './cookie';

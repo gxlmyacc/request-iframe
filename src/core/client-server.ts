@@ -2,21 +2,12 @@ import type { PostMessageData } from '../types';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
 import { getOrCreateMessageChannel, releaseMessageChannel } from '../utils/cache';
 import { isCompatibleVersion } from '../utils';
-import { MessageType, DefaultTimeout, ProtocolVersion, Messages, formatMessage, MessageRole } from '../constants';
+import { MessageType, ProtocolVersion, Messages, formatMessage, MessageRole, OriginConstant } from '../constants';
 
 /**
  * Stream message handler callback
  */
 export type StreamMessageCallback = (data: PostMessageData, context: MessageContext) => void;
-
-/**
- * Pending acknowledgment response
- */
-interface PendingAck {
-  resolve: (received: boolean) => void;
-  reject: (error: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
-}
 
 /**
  * Pending request awaiting response
@@ -34,12 +25,14 @@ interface PendingRequest {
 export interface ClientServerOptions {
   /** Message isolation key */
   secretKey?: string;
-  /** ACK timeout */
-  ackTimeout?: number;
   /** Protocol version validator (optional, uses built-in validation by default) */
   versionValidator?: VersionValidator;
   /** Whether to automatically open when creating the client server. Default is true. */
   autoOpen?: boolean;
+  /** Advanced: auto-ack echo limit for ack.meta length (internal). */
+  autoAckMaxMetaLength?: number;
+  /** Advanced: auto-ack echo limit for ack.id length (internal). */
+  autoAckMaxIdLength?: number;
 }
 
 /**
@@ -49,11 +42,7 @@ export interface ClientServerOptions {
  */
 export class RequestIframeClientServer {
   private readonly dispatcher: MessageDispatcher;
-  private readonly ackTimeout: number;
   private readonly versionValidator: VersionValidator;
-  
-  /** Pending responses awaiting client acknowledgment */
-  private readonly pendingAcks = new Map<string, PendingAck>();
   
   /** Pending requests awaiting response */
   private readonly pendingRequests = new Map<string, PendingRequest>();
@@ -73,12 +62,15 @@ export class RequestIframeClientServer {
   private _isOpen = false;
 
   public constructor(options?: ClientServerOptions, instanceId?: string) {
-    this.ackTimeout = options?.ackTimeout ?? DefaultTimeout.ACK;
     this.versionValidator = options?.versionValidator ?? isCompatibleVersion;
     
     // Get or create shared channel and create dispatcher
     const channel = getOrCreateMessageChannel(options?.secretKey);
     this.dispatcher = new MessageDispatcher(channel, MessageRole.CLIENT, instanceId);
+    this.dispatcher.setAutoAckLimits({
+      maxMetaLength: options?.autoAckMaxMetaLength,
+      maxIdLength: options?.autoAckMaxIdLength
+    });
     
     // Auto-open by default (unless explicitly set to false)
     if (options?.autoOpen !== false) {
@@ -158,15 +150,6 @@ export class RequestIframeClientServer {
       this.dispatcher.registerHandler(
         MessageType.ERROR,
         boundHandleClientResponse,
-        handlerOptions
-      )
-    );
-
-    // Handle RECEIVED messages
-    this.unregisterFns.push(
-      this.dispatcher.registerHandler(
-        MessageType.RECEIVED,
-        this.handleReceived.bind(this),
         handlerOptions
       )
     );
@@ -269,7 +252,7 @@ export class RequestIframeClientServer {
         // If validator throws, treat as disallowed
         return;
       }
-    } else if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
+    } else if (pending.origin && pending.origin !== OriginConstant.ANY && context.origin !== pending.origin) {
       return;
     }
 
@@ -295,18 +278,6 @@ export class RequestIframeClientServer {
   }
 
   /**
-   * Handle received acknowledgment
-   */
-  private handleReceived(data: PostMessageData): void {
-    const pending = this.pendingAcks.get(data.requestId);
-    if (pending) {
-      clearTimeout(pending.timeoutId);
-      this.pendingAcks.delete(data.requestId);
-      pending.resolve(true);
-    }
-  }
-
-  /**
    * Handle pong
    */
   private handlePong(data: PostMessageData, context: MessageContext): void {
@@ -320,7 +291,7 @@ export class RequestIframeClientServer {
         } catch {
           return;
         }
-      } else if (pending.origin && pending.origin !== '*' && context.origin !== pending.origin) {
+      } else if (pending.origin && pending.origin !== OriginConstant.ANY && context.origin !== pending.origin) {
         return;
       }
       if (!context.handledBy) {
@@ -347,22 +318,6 @@ export class RequestIframeClientServer {
   /** Get the underlying MessageDispatcher */
   public get messageDispatcher(): MessageDispatcher {
     return this.dispatcher;
-  }
-
-  /**
-   * Register pending acknowledgment response
-   */
-  public _registerPendingAck(
-    requestId: string,
-    resolve: (received: boolean) => void,
-    reject: (error: Error) => void
-  ): void {
-    const timeoutId = setTimeout(() => {
-      this.pendingAcks.delete(requestId);
-      resolve(false);
-    }, this.ackTimeout);
-
-    this.pendingAcks.set(requestId, { resolve, reject, timeoutId });
   }
 
   /**
@@ -401,8 +356,6 @@ export class RequestIframeClientServer {
     
     // Clear pending
     this.pendingRequests.clear();
-    this.pendingAcks.forEach((pending) => clearTimeout(pending.timeoutId));
-    this.pendingAcks.clear();
     this.warnedMissingPendingWhenClosed.clear();
     
     // Destroy dispatcher and release channel reference

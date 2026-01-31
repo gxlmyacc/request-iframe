@@ -1,6 +1,6 @@
 {
   "name": "request-iframe",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Communicate with iframes like sending HTTP requests",
   "main": "library/index.js",
   "module": "esm/index.js",

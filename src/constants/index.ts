@@ -15,6 +15,24 @@ export const ProtocolVersion = {
 } as const;
 
 /**
+ * Special origin values
+ */
+export const OriginConstant = {
+  /** Wildcard origin (postMessage targetOrigin = '*') */
+  ANY: '*'
+} as const;
+
+/**
+ * Auto-ack (ACK-only) limits.
+ */
+export const AutoAckConstant = {
+  /** Max length of ack.id to be echoed back in auto-ack */
+  MAX_ID_LENGTH: 1024,
+  /** Max length of ack.meta to be echoed back in auto-ack */
+  MAX_META_LENGTH: 5120
+} as const;
+
+/**
  * Protocol version type
  */
 export type ProtocolVersionValue = typeof ProtocolVersion[keyof typeof ProtocolVersion];
@@ -124,8 +142,6 @@ export const MessageType = {
   RESPONSE: 'response',
   /** Error message */
   ERROR: 'error',
-  /** Client confirms response received */
-  RECEIVED: 'received',
   /** Ping message (for connection detection) */
   PING: 'ping',
   /** Pong message (for connection detection) */
@@ -161,7 +177,7 @@ export type MessageRoleValue = typeof MessageRole[keyof typeof MessageRole];
 export const DefaultTimeout = {
   /** 
    * ACK confirmation timeout: 1000ms (1s)
-   * Used for both client waiting for server ACK and server waiting for client RECEIVED.
+   * Used for requireAck confirmation (ACK-only).
    * Increased from 500ms to accommodate slower environments or busy browsers where postMessage
    * serialization/deserialization may take longer.
    */
@@ -239,9 +255,7 @@ export const StreamInternalMessageType = {
   /** Cancel message */
   CANCEL: 'cancel',
   /** Pull message */
-  PULL: 'pull',
-  /** Ack message */
-  ACK: 'ack'
+  PULL: 'pull'
 } as const;
 
 /**

@@ -30,10 +30,10 @@ export interface RequestDefaults {
    */
   streamTimeout?: number;
   /**
-   * Ack metadata (reserved field).
+   * Ack payload (reserved field).
    * @internal
    */
-  ackMeta?: any;
+  ack?: any;
   /** 
    * Whether to directly return response.data instead of the full Response object.
    * If true, send() will return Promise<T> instead of Promise<Response<T>>.
@@ -175,7 +175,7 @@ export interface PostMessageData {
   /** Message isolation key (used to isolate different businesses/instances) */
   secretKey?: string;
   /** Message type */
-  type: 'request' | 'ack' | 'async' | 'response' | 'error' | 'received' | 'ping' | 'pong' | 
+  type: 'request' | 'ack' | 'async' | 'response' | 'error' | 'ping' | 'pong' | 
         'stream_start' | 'stream_data' | 'stream_end' | 'stream_error' | 'stream_cancel' | 'stream_pull' | 'stream_ack';
   /** Request ID */
   requestId: string;
@@ -210,15 +210,14 @@ export interface PostMessageData {
    * Whether the sender requires the receiver to send back a confirmation message.
    *
    * Typical usage:
-   * - REQUEST / PING: receiver sends ACK to confirm it accepted the message
-   * - RESPONSE / ERROR: receiver sends RECEIVED to confirm it received the result
+   * - Any message: receiver sends ACK to confirm it accepted the message (ACK-only workflow)
    */
   requireAck?: boolean;
   /**
-   * Acknowledgement metadata (reserved field).
+   * Ack payload (reserved field).
    * @internal
    */
-  ackMeta?: any;
+  ack?: any;
   /** 
    * Message sender role
    * - 'client': message sent by client
@@ -296,10 +295,10 @@ export interface SendOptions {
    */
   requireAck?: boolean;
   /**
-   * Ack metadata (reserved field).
+   * Ack payload (reserved field).
    * @internal
    */
-  ackMeta?: any;
+  ack?: any;
 }
 
 /**
@@ -406,7 +405,7 @@ export type ServerHandler = (
 /**
  * server.on/off event names (low-level)
  */
-export type ServerEventName = 'request' | 'ack' | 'async' | 'response' | 'error' | 'received' | 'ping' | 'pong';
+export type ServerEventName = 'request' | 'ack' | 'async' | 'response' | 'error' | 'ping' | 'pong';
 
 /**
  * Client interface
@@ -575,6 +574,16 @@ export interface RequestIframeClientOptions extends RequestDefaults {
    * Default is true. If set to false, you need to manually call client.open() to start message handling.
    */
   autoOpen?: boolean;
+  /**
+   * @internal
+   * Advanced: auto-ack echo limit for ack.meta length.
+   */
+  autoAckMaxMetaLength?: number;
+  /**
+   * @internal
+   * Advanced: auto-ack echo limit for ack.id length.
+   */
+  autoAckMaxIdLength?: number;
 }
 
 /**
@@ -619,4 +628,14 @@ export interface RequestIframeServerOptions extends Pick<RequestDefaults, 'ackTi
    * - Default: Infinity (no limit)
    */
   maxConcurrentRequestsPerClient?: number;
+  /**
+   * @internal
+   * Advanced: auto-ack echo limit for ack.meta length.
+   */
+  autoAckMaxMetaLength?: number;
+  /**
+   * @internal
+   * Advanced: auto-ack echo limit for ack.id length.
+   */
+  autoAckMaxIdLength?: number;
 }

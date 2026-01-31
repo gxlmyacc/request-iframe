@@ -4,9 +4,10 @@ import {
   WritableStreamOptions,
   IIframeWritableStream,
   StreamChunk,
-  WritableStreamMode
+  WritableStreamMode,
+  StreamFrameOptions
 } from './types';
-import { createPostMessage } from '../utils';
+import { createPostMessage, generateRequestId } from '../utils';
 import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamMode as StreamModeConstant, MessageRole, formatMessage, DefaultTimeout, StreamInternalMessageType, StreamEvent } from '../constants';
 import type { StreamMessageData } from './types';
 import { IframeStreamCore } from './stream-core';
@@ -37,6 +38,8 @@ export class IframeWritableStream
   private readonly autoResolve?: boolean;
   private readonly expireTimeout?: number;
   private readonly streamTimeout?: number;
+  private readonly maxPendingChunks?: number;
+  private readonly maxPendingBytes?: number;
   private expireTimer: ReturnType<typeof setTimeout> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRemoteActivityAt = Date.now();
@@ -45,11 +48,24 @@ export class IframeWritableStream
   /** pull/ack protocol */
   private pullCredit = 0;
   private seq = 0;
-  private readonly pendingQueue: Array<{ data: any; done: boolean }> = [];
+  private pendingBytes = 0;
+  private readonly pendingQueue: Array<{
+    data: any;
+    done: boolean;
+    requireAck?: boolean;
+    ackRequestId?: string;
+    ackTimeout?: number;
+    resolveAck?: (ok: boolean) => void;
+    bytes: number;
+  }> = [];
   private pumping = false;
   private completionPromise: Promise<void> | null = null;
   private resolveCompletion: (() => void) | null = null;
   private rejectCompletion: ((err: Error) => void) | null = null;
+
+  private ackWaiters = new Map<string, { resolve: (ok: boolean) => void; timeoutId: ReturnType<typeof setTimeout> }>();
+  private ackReceiverRegistered = false;
+  private ackReceiver?: (data: any, context: any) => void;
 
   public constructor(options: WritableStreamOptions = {}) {
     const streamId = generateStreamId();
@@ -64,6 +80,82 @@ export class IframeWritableStream
     // Default to async-timeout length to avoid leaking long-lived streams
     this.expireTimeout = options.expireTimeout ?? DefaultTimeout.ASYNC;
     this.streamTimeout = options.streamTimeout;
+    this.maxPendingChunks = options.maxPendingChunks;
+    this.maxPendingBytes = options.maxPendingBytes;
+  }
+
+  private enqueue(item: {
+    data: any;
+    done: boolean;
+    requireAck?: boolean;
+    ackRequestId?: string;
+    ackTimeout?: number;
+    resolveAck?: (ok: boolean) => void;
+  }): void {
+    const max = this.maxPendingChunks;
+    if (typeof max === 'number' && max > 0 && this.pendingQueue.length >= max) {
+      throw new Error(formatMessage(Messages.STREAM_PENDING_QUEUE_OVERFLOW, max));
+    }
+    const bytes = this.estimateChunkBytes(item.data);
+    const maxBytes = this.maxPendingBytes;
+    if (typeof maxBytes === 'number' && maxBytes > 0) {
+      const next = this.pendingBytes + bytes;
+      if (!Number.isFinite(next) || next > maxBytes) {
+        throw new Error(formatMessage(Messages.STREAM_PENDING_BYTES_OVERFLOW, maxBytes));
+      }
+    }
+    this.pendingQueue.push({ ...item, bytes });
+    this.pendingBytes += bytes;
+  }
+
+  private estimateChunkBytes(data: any): number {
+    if (data === null || data === undefined) return 0;
+    if (typeof data === 'string') return this.utf8ByteLength(data);
+
+    try {
+      // ArrayBuffer
+      if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) {
+        return data.byteLength;
+      }
+      // TypedArray / DataView
+      if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(data)) {
+        return (data as ArrayBufferView).byteLength;
+      }
+    } catch {
+      /** ignore */
+    }
+
+    try {
+      // Blob / File
+      if (typeof Blob !== 'undefined' && data instanceof Blob) {
+        return data.size;
+      }
+    } catch {
+      /** ignore */
+    }
+
+    // Strategy C: only count well-defined types; other values are not counted.
+    return 0;
+  }
+
+  private utf8ByteLength(text: string): number {
+    try {
+      if (typeof TextEncoder !== 'undefined') {
+        return new TextEncoder().encode(text).length;
+      }
+    } catch {
+      /** ignore */
+    }
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof Buffer !== 'undefined') {
+        // eslint-disable-next-line no-undef
+        return Buffer.byteLength(text, 'utf8');
+      }
+    } catch {
+      /** ignore */
+    }
+    return text.length;
   }
 
   /** Get stream state */
@@ -102,10 +194,6 @@ export class IframeWritableStream
         this.flush();
         break;
       }
-      case StreamInternalMessageType.ACK:
-        // Ack is treated as heartbeat; no further action required
-        this.emit(StreamEvent.ACK, { seq: data.seq });
-        break;
       case StreamInternalMessageType.CANCEL:
         this.emit(StreamEvent.CANCEL, { reason: data.reason, remote: true });
         this.cancel(data.reason);
@@ -193,6 +281,57 @@ export class IframeWritableStream
     return true;
   }
 
+  private ensureAckReceiver(): void {
+    if (this.ackReceiverRegistered) return;
+    if (!this.context) return;
+    const ch: any = this.context.channel as any;
+    if (typeof ch.addReceiver !== 'function' || typeof ch.removeReceiver !== 'function') return;
+
+    this.ackReceiver = (data: any, context: any) => {
+      if (!data || data.type !== MessageType.ACK) return;
+      const pending = this.ackWaiters.get(data.requestId);
+      if (!pending) return;
+      if (context && !context.handledBy) {
+        context.handledBy = `stream:${this.streamId}`;
+      }
+      clearTimeout(pending.timeoutId);
+      this.ackWaiters.delete(data.requestId);
+      pending.resolve(true);
+    };
+
+    ch.addReceiver(this.ackReceiver);
+    this.ackReceiverRegistered = true;
+  }
+
+  private cleanupAckWaiters(): void {
+    this.ackWaiters.forEach((p) => {
+      clearTimeout(p.timeoutId);
+      p.resolve(false);
+    });
+    this.ackWaiters.clear();
+
+    if (this.ackReceiverRegistered && this.ackReceiver && this.context) {
+      const ch: any = this.context.channel as any;
+      if (typeof ch.removeReceiver === 'function') {
+        try {
+          ch.removeReceiver(this.ackReceiver);
+        } catch {
+          /** ignore */
+        }
+      }
+    }
+    this.ackReceiverRegistered = false;
+    this.ackReceiver = undefined;
+  }
+
+  private registerAckWaiter(requestId: string, timeoutMs: number, resolve: (ok: boolean) => void): void {
+    const timeoutId = setTimeout(() => {
+      this.ackWaiters.delete(requestId);
+      resolve(false);
+    }, timeoutMs);
+    this.ackWaiters.set(requestId, { resolve, timeoutId });
+  }
+
   private clearExpireTimer(): void {
     if (this.expireTimer) {
       clearTimeout(this.expireTimer);
@@ -276,7 +415,14 @@ export class IframeWritableStream
   /**
    * Push a chunk manually (mode === 'push').
    */
-  public write(data: any, done: boolean = false): void {
+  public write(data: any, done?: boolean): void;
+  public write(data: any, options: StreamFrameOptions): Promise<boolean>;
+  public write(data: any, done: boolean | undefined, options: StreamFrameOptions): Promise<boolean>;
+  public write(
+    data: any,
+    doneOrOptions: boolean | StreamFrameOptions = false,
+    options?: StreamFrameOptions
+  ): void | Promise<boolean> {
     if (this.mode !== StreamModeConstant.PUSH) {
       throw new Error(Messages.STREAM_WRITE_ONLY_IN_PUSH_MODE);
     }
@@ -289,10 +435,33 @@ export class IframeWritableStream
     if (this._state !== StreamStateConstant.STREAMING) {
       throw new Error(Messages.STREAM_ENDED);
     }
-    // push mode now buffers and sends based on pull credit
-    this.pendingQueue.push({ data, done });
-    this.emit(StreamEvent.WRITE, { data, done });
-    this.flush();
+
+    const done = typeof doneOrOptions === 'boolean' ? doneOrOptions : false;
+    const opts = (typeof doneOrOptions === 'object' ? doneOrOptions : options) as StreamFrameOptions | undefined;
+    const requireAck = opts?.requireAck === true;
+    const ackTimeout = opts?.ackTimeout ?? DefaultTimeout.ACK;
+
+    if (!requireAck) {
+      // push mode now buffers and sends based on pull credit
+      this.enqueue({ data, done });
+      this.emit(StreamEvent.WRITE, { data, done });
+      this.flush();
+      return;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const ackRequestId = generateRequestId();
+      this.enqueue({
+        data,
+        done,
+        requireAck: true,
+        ackRequestId,
+        ackTimeout,
+        resolveAck: resolve
+      });
+      this.emit(StreamEvent.WRITE, { data, done });
+      this.flush();
+    });
   }
 
   /**
@@ -307,7 +476,7 @@ export class IframeWritableStream
     // In push mode, end means enqueue a terminal marker if nothing queued
     if (this.mode === StreamModeConstant.PUSH) {
       if (this.pendingQueue.length === 0) {
-        this.pendingQueue.push({ data: undefined, done: true });
+        this.enqueue({ data: undefined, done: true });
       } else {
         // Ensure the last queued chunk marks done
         this.pendingQueue[this.pendingQueue.length - 1].done = true;
@@ -335,14 +504,14 @@ export class IframeWritableStream
             this.endInternal();
             break;
           }
-          this.pendingQueue.push({ data: r.value, done: false });
+          this.enqueue({ data: r.value, done: false });
           this.flush();
         }
       } else if (this.nextFn) {
         while (this._state === StreamStateConstant.STREAMING) {
           if (this.pullCredit <= 0) break;
           const result = await Promise.resolve(this.nextFn());
-          this.pendingQueue.push({ data: result.data, done: result.done });
+          this.enqueue({ data: result.data, done: result.done });
           this.flush();
           if (result.done) break;
         }
@@ -364,13 +533,46 @@ export class IframeWritableStream
   /**
    * Send data chunk
    */
-  private sendData(data: any, done: boolean = false): void {
+  private sendData(
+    data: any,
+    done: boolean = false,
+    options?: { requestId?: string; requireAck?: boolean }
+  ): void {
+    if (!this.context) {
+      throw new Error(Messages.STREAM_NOT_BOUND);
+    }
     const seq = this.seq++;
-    this.sendMessage(MessageType.STREAM_DATA, {
-      data: this.encodeData(data),
-      done,
-      seq
-    });
+
+    const isClientStream = this.context.clientId !== undefined && this.context.serverId === undefined;
+    const role = isClientStream ? MessageRole.CLIENT : MessageRole.SERVER;
+    const creatorId = this.context.serverId ?? this.context.clientId;
+    const message = createPostMessage(MessageType.STREAM_DATA as any, options?.requestId ?? this.context.requestId, {
+      secretKey: this.context.secretKey,
+      requireAck: options?.requireAck,
+      /**
+       * When per-frame requireAck is enabled, include a unique identifier in ack.
+       * - seq is the stream frame sequence number.
+       *
+       * NOTE: ack is an internal reserved field (not part of public API).
+       */
+      ack: options?.requireAck ? { id: `${this.streamId}:${seq}` } : undefined,
+      body: {
+        streamId: this.streamId,
+        data: this.encodeData(data),
+        done,
+        seq
+      },
+      role,
+      creatorId,
+      targetId: this.context.targetId
+    } as any);
+
+    const ok = this.context.channel.send(this.context.targetWindow, message, this.context.targetOrigin);
+    if (!ok) {
+      this._state = StreamStateConstant.CANCELLED;
+      this.clearExpireTimer();
+      throw new Error(formatMessage(Messages.STREAM_CANCELLED, 'Target window closed'));
+    }
     this.emit(StreamEvent.SEND, { seq, done });
   }
 
@@ -384,15 +586,30 @@ export class IframeWritableStream
 
     while (this.pullCredit > 0 && this.pendingQueue.length > 0 && this._state === StreamStateConstant.STREAMING) {
       const item = this.pendingQueue.shift()!;
+      this.pendingBytes -= item.bytes;
       this.pullCredit--;
       try {
-        this.sendData(item.data, item.done);
+        if (item.requireAck && item.ackRequestId && item.resolveAck) {
+          this.ensureAckReceiver();
+          if (this.ackReceiverRegistered) {
+            this.registerAckWaiter(item.ackRequestId, item.ackTimeout ?? DefaultTimeout.ACK, item.resolveAck);
+            this.sendData(item.data, item.done, { requestId: item.ackRequestId, requireAck: true });
+          } else {
+            item.resolveAck(false);
+            this.sendData(item.data, item.done);
+          }
+        } else {
+          this.sendData(item.data, item.done);
+        }
       } catch (e: any) {
         // send failure treated as cancellation
         this._state = StreamStateConstant.CANCELLED;
         this.clearExpireTimer();
         this.clearIdleTimer();
         this.unregisterControlHandler();
+        this.pendingQueue.length = 0;
+        this.pendingBytes = 0;
+        this.cleanupAckWaiters();
         this.rejectCompletion?.(e instanceof Error ? e : new Error(String(e)));
         throw e;
       }
@@ -420,9 +637,12 @@ export class IframeWritableStream
     this.clearExpireTimer();
     this.clearIdleTimer();
     this.unregisterControlHandler();
+    this.pendingQueue.length = 0;
+    this.pendingBytes = 0;
     this.sendMessage(MessageType.STREAM_END);
     this.emit(StreamEvent.END);
     this.emit(StreamEvent.STATE, { state: this._state });
+    this.cleanupAckWaiters();
     this.clearAllListeners();
     this.resolveCompletion?.();
   }
@@ -437,11 +657,14 @@ export class IframeWritableStream
     this.clearExpireTimer();
     this.clearIdleTimer();
     this.unregisterControlHandler();
+    this.pendingQueue.length = 0;
+    this.pendingBytes = 0;
     this.sendMessage(MessageType.STREAM_ERROR, {
       error: message
     });
     this.emit(StreamEvent.ERROR, { error: new Error(message) });
     this.emit(StreamEvent.STATE, { state: this._state });
+    this.cleanupAckWaiters();
     this.clearAllListeners();
     this.resolveCompletion?.();
   }
@@ -463,6 +686,8 @@ export class IframeWritableStream
     this.clearExpireTimer();
     this.clearIdleTimer();
     this.unregisterControlHandler();
+    this.pendingQueue.length = 0;
+    this.pendingBytes = 0;
     this.emit(StreamEvent.CANCEL, { reason, remote: false });
     this.emit(StreamEvent.STATE, { state: this._state });
     
@@ -475,6 +700,7 @@ export class IframeWritableStream
         // ignore send failures on cancel
       }
     }
+    this.cleanupAckWaiters();
     this.clearAllListeners();
     this.resolveCompletion?.();
   }

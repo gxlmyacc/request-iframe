@@ -56,6 +56,8 @@ const defaultMessages = {
   STREAM_ENDED: 'Stream has ended',
   STREAM_READ_ERROR: 'Failed to read stream data',
   STREAM_WRITE_ONLY_IN_PUSH_MODE: 'Stream write() is only available when mode is "push"',
+  STREAM_PENDING_QUEUE_OVERFLOW: 'Stream pending queue overflow (limit: {0})',
+  STREAM_PENDING_BYTES_OVERFLOW: 'Stream pending bytes overflow (limit: {0})',
 
   /** Debug messages - Client */
   DEBUG_CLIENT_REQUEST_START: '📤 [Client] Request Start',
@@ -73,7 +75,7 @@ const defaultMessages = {
   DEBUG_CLIENT_REQUEST_TIMEOUT: '⏱️ [Client] Request Timeout',
   DEBUG_CLIENT_SENDING_REQUEST: '📤 [Client] Sending Request',
   DEBUG_CLIENT_SENDING_PING: '📤 [Client] Sending Ping',
-  DEBUG_CLIENT_SENDING_RECEIVED_ACK: '📤 [Client] Sending Received ACK',
+  DEBUG_CLIENT_SENDING_RECEIVED_ACK: '📤 [Client] Sending ACK',
 
   /** Debug messages - Server */
   DEBUG_SERVER_RECEIVED_REQUEST: '📥 [Server] Received Request',

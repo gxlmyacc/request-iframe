@@ -2,6 +2,7 @@ import {
   PostMessageData
 } from '../types';
 import { isValidPostMessage, createPostMessage, isWindowAvailable } from '../utils';
+import { OriginConstant } from '../constants';
 
 /**
  * Message context (extracted from MessageEvent, transport-agnostic)
@@ -13,7 +14,7 @@ export interface MessageContext {
   origin: string;
   /**
    * Whether the receiver accepted this message for processing.
-   * - Used by MessageDispatcher to decide whether it should send an ACK/RECEIVED automatically.
+   * - Used by MessageDispatcher to decide whether it should send an ACK automatically.
    * - Should be set by high-level handlers once they确定会处理该消息（例如：路由匹配到 handler，或找到 pending request）。
    */
   accepted?: boolean;
@@ -160,7 +161,7 @@ export class MessageChannel {
    * @param message message data (already formatted as PostMessageData)
    * @param targetOrigin target origin (defaults to '*')
    */
-  public send(target: Window, message: PostMessageData, targetOrigin: string = '*'): boolean {
+  public send(target: Window, message: PostMessageData, targetOrigin: string = OriginConstant.ANY): boolean {
     if (!isWindowAvailable(target)) {
       return false;
     }

@@ -49,6 +49,23 @@ export type StreamEventListener<E extends StreamEventName = StreamEventName> = (
 ) => void;
 
 /**
+ * Per-frame send/receive options (optional).
+ */
+export interface StreamFrameOptions {
+  /**
+   * Whether to require delivery acknowledgment for this frame.
+   *
+   * When enabled:
+   * - the sender attaches `requireAck: true` to the underlying postMessage
+   * - the receiver (MessageDispatcher) auto-replies with `ack` after it accepts the message
+   * - the returned Promise resolves to true/false
+   */
+  requireAck?: boolean;
+  /** Acknowledgment timeout (ms). Default: DefaultTimeout.ACK */
+  ackTimeout?: number;
+}
+
+/**
  * Stream data chunk
  */
 export interface StreamChunk {
@@ -95,6 +112,28 @@ export interface WritableStreamOptions {
    * If true, client will automatically read the stream and return fileData instead of stream
    */
   autoResolve?: boolean;
+  /**
+   * Maximum number of pending (unsent) chunks kept in memory on the writer side.
+   *
+   * This is especially useful for long-lived `push` streams when the receiver stops pulling
+   * (e.g. tab hidden/backgrounded): the writer-side `pendingQueue` may grow without bound if
+   * user code keeps calling write().
+   *
+   * - When enabled (value > 0), exceeding the limit will cause write()/producer to throw.
+   * - Default: unlimited.
+   */
+  maxPendingChunks?: number;
+  /**
+   * Maximum bytes of pending (unsent) chunks kept in memory on the writer side.
+   *
+   * Notes:
+   * - Only counts well-defined types: string / ArrayBuffer / TypedArray(DataView) / Blob / File.
+   * - For other values (plain objects), the size is treated as 0 (not counted). If you need
+   *   byte-level backpressure for objects, stringify them yourself before write().
+   *
+   * Default: unlimited.
+   */
+  maxPendingBytes?: number;
 }
 
 /**
@@ -216,6 +255,8 @@ export interface IIframeWritableStream {
    * @param done Whether this is the last chunk
    */
   write(data: any, done?: boolean): void;
+  write(data: any, options: StreamFrameOptions): Promise<boolean>;
+  write(data: any, done: boolean | undefined, options: StreamFrameOptions): Promise<boolean>;
   /**
    * End the stream (only meaningful when mode === 'push').
    */
@@ -315,12 +356,13 @@ export interface StreamMessageData {
   mode?: WritableStreamMode;
   /** Data chunk */
   data?: any;
-  /** Chunk sequence number (used by pull/ack protocol) */
+  /** Chunk sequence number (used for data chunk identification) */
   seq?: number;
   /** Whether this is the last chunk */
   done?: boolean;
   /** Pull credit (how many chunks requested) */
   credit?: number;
+  /** reserved */
   /** Error message */
   error?: string;
   /** Cancel reason */

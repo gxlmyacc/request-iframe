@@ -1,3 +1,5 @@
+import { OriginConstant } from '../constants';
+
 /**
  * Origin matcher type (supports string, RegExp, Array)
  */
@@ -12,7 +14,7 @@ export type OriginMatcher = string | RegExp | Array<string | RegExp>;
  * - Array: any item matches.
  */
 export function matchOrigin(origin: string, matcher: OriginMatcher): boolean {
-  if (matcher === '*') return true;
+  if (matcher === OriginConstant.ANY) return true;
 
   if (typeof matcher === 'string') {
     return origin === matcher;

@@ -3,7 +3,7 @@ import { getIframeTargetOrigin, generateInstanceId } from '../utils';
 import { RequestIframeClientServer } from '../core/client-server';
 import { RequestIframeClientImpl } from '../core/client';
 import { setupClientDebugInterceptors } from '../utils/debug';
-import { Messages, ErrorCode } from '../constants';
+import { Messages, ErrorCode, OriginConstant } from '../constants';
 
 /**
  * Create a client (for sending requests)
@@ -18,7 +18,7 @@ export function requestIframeClient(
   options?: RequestIframeClientOptions
 ): RequestIframeClient {
   let targetWindow: Window | null = null;
-  let targetOrigin = '*';
+  let targetOrigin: string = OriginConstant.ANY;
 
   if ((target as HTMLIFrameElement).tagName === 'IFRAME') {
     const iframe = target as HTMLIFrameElement;
@@ -32,7 +32,7 @@ export function requestIframeClient(
     }
   } else {
     targetWindow = target as Window;
-    targetOrigin = '*';
+    targetOrigin = OriginConstant.ANY;
   }
 
   // Allow user to override targetOrigin explicitly
@@ -49,8 +49,9 @@ export function requestIframeClient(
   // Create ClientServer (internally obtains or creates a shared MessageChannel)
   const server = new RequestIframeClientServer({
     secretKey,
-    ackTimeout: options?.ackTimeout,
-    autoOpen: options?.autoOpen
+    autoOpen: options?.autoOpen,
+    autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
+    autoAckMaxIdLength: options?.autoAckMaxIdLength
   }, instanceId);
   
   // Create client instance

@@ -42,7 +42,7 @@ interface MiddlewareItem {
  * Pending acknowledgment
  */
 interface PendingAck {
-  resolve: (received: boolean, ackMeta?: any) => void;
+  resolve: (received: boolean, ack?: any) => void;
   reject: (error: Error) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
@@ -90,6 +90,10 @@ export interface ServerOptions {
    * Used to mitigate message explosion caused by abnormal code or attacks.
    */
   maxConcurrentRequestsPerClient?: number;
+  /** Advanced: auto-ack echo limit for ack.meta length (internal). */
+  autoAckMaxMetaLength?: number;
+  /** Advanced: auto-ack echo limit for ack.id length (internal). */
+  autoAckMaxIdLength?: number;
 }
 
 /**
@@ -144,6 +148,10 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     // Get or create shared channel and create dispatcher
     const channel = getOrCreateMessageChannel(options?.secretKey);
     this.dispatcher = new MessageDispatcher(channel, MessageRole.SERVER, this.id);
+    this.dispatcher.setAutoAckLimits({
+      maxMetaLength: options?.autoAckMaxMetaLength,
+      maxIdLength: options?.autoAckMaxIdLength
+    });
     
     // Auto-open by default (unless explicitly set to false)
     if (options?.autoOpen !== false) {
@@ -250,11 +258,11 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       )
     );
 
-    // Handle RECEIVED messages (for confirming response delivery)
+    // Handle ACK messages (for confirming response delivery when requireAck === true)
     this.unregisterFns.push(
       this.dispatcher.registerHandler(
-        MessageType.RECEIVED,
-        (data, context) => this.handleReceived(data, context),
+        MessageType.ACK,
+        (data, context) => this.handleAck(data, context),
         handlerOptions
       )
     );
@@ -404,6 +412,11 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     if (!body?.streamId) return;
     const handler = this.streamHandlers.get(body.streamId);
     if (handler) {
+      // Mark as accepted/handled so MessageDispatcher can auto-ack when requireAck === true
+      if (!context.handledBy) {
+        context.accepted = true;
+        context.handledBy = this.id;
+      }
       const messageType = (data.type as string).replace('stream_', '');
       handler({ ...body, type: messageType as any });
     }
@@ -497,9 +510,9 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   }
 
   /**
-   * Handle received acknowledgment
+   * Handle ACK (receipt confirmation for responses when requireAck === true).
    */
-  private handleReceived(data: PostMessageData, context: MessageContext): void {
+  private handleAck(data: PostMessageData, context: MessageContext): void {
     if (!this.isOriginAllowed(data, context)) return;
     const pending = this.pendingAcks.get(data.requestId);
     if (pending) {
@@ -509,7 +522,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       }
       clearTimeout(pending.timeoutId);
       this.pendingAcks.delete(data.requestId);
-      pending.resolve(true, (data as any).ackMeta);
+      pending.resolve(true, (data as any).ack);
     }
   }
 
@@ -683,7 +696,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
             status: HttpStatus.TOO_MANY_REQUESTS,
             statusText: HttpStatusText[HttpStatus.TOO_MANY_REQUESTS],
             requireAck: data.requireAck,
-            ackMeta: (data as any).ackMeta,
+            ack: (data as any).ack,
             targetId: data.creatorId
           }
         );
@@ -725,8 +738,8 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     // Register callback waiting for client acknowledgment
     this.registerPendingAck(
       data.requestId,
-      (received: boolean, ackMeta?: any) => {
-        res._triggerAck(received, ackMeta);
+      (received: boolean, ack?: any) => {
+        res._triggerAck(received, ack);
       },
       () => {
         res._triggerAck(false);
@@ -758,7 +771,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
               status: HttpStatus.REQUEST_TIMEOUT,
               statusText: HttpStatusText[HttpStatus.REQUEST_TIMEOUT],
               requireAck: pending.data.requireAck,
-              ackMeta: (pending.data as any).ackMeta,
+              ack: (pending.data as any).ack,
               targetId: pending.data.creatorId
             }
           );

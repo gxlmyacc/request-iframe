@@ -1,6 +1,6 @@
 import { RequestIframeClientServer } from '../core/client-server';
 import { clearMessageChannelCache } from '../utils/cache';
-import { MessageRole } from '../constants';
+import { MessageRole, OriginConstant } from '../constants';
 
 function createMockWindow(): Window & { postMessage: jest.Mock } {
   const w = Object.create(window) as any;
@@ -76,7 +76,7 @@ describe('core/client-server (RequestIframeClientServer) - branch focused', () =
 
     const resolve = jest.fn();
     const reject = jest.fn();
-    cs._registerPendingRequest('rid', resolve, reject, '*');
+    cs._registerPendingRequest('rid', resolve, reject, OriginConstant.ANY);
 
     const source = createMockWindow();
     dispatchFrameworkMessage({
@@ -309,7 +309,7 @@ describe('core/client-server (RequestIframeClientServer) - branch focused', () =
     const source = createMockWindow();
 
     const promise = new Promise((resolve, reject) => {
-      cs._registerPendingRequest('rid', resolve as any, reject as any, '*');
+      cs._registerPendingRequest('rid', resolve as any, reject as any, OriginConstant.ANY);
     });
 
     dispatchFrameworkMessage({
@@ -366,38 +366,6 @@ describe('core/client-server (RequestIframeClientServer) - branch focused', () =
     cs.destroy();
   });
 
-  it('pending ack should resolve true on received, or false on timeout', async () => {
-    const secretKey = 'cs-ack';
-    const cs = new RequestIframeClientServer({ secretKey, ackTimeout: 10 }, 'client-1');
-
-    // received branch
-    const resolveReceived = jest.fn();
-    cs._registerPendingAck('rid-received', resolveReceived, jest.fn());
-    const source = createMockWindow();
-    dispatchFrameworkMessage({
-      origin: 'https://example.com',
-      source,
-      data: {
-        __requestIframe__: 1,
-        type: 'received',
-        requestId: 'rid-received',
-        role: MessageRole.SERVER,
-        secretKey
-      }
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(resolveReceived).toHaveBeenCalledWith(true);
-
-    // timeout branch
-    jest.useFakeTimers();
-    const resolveTimeout = jest.fn();
-    cs._registerPendingAck('rid-timeout', resolveTimeout, jest.fn());
-    jest.advanceTimersByTime(10);
-    await Promise.resolve();
-    expect(resolveTimeout).toHaveBeenCalledWith(false);
-    jest.useRealTimers();
-
-    cs.destroy();
-  });
+  /** removed: pending received-ack workflow (ACK-only requireAck) */
 });
 

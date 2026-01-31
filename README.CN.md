@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/TypeScript-Ready-blue" alt="TypeScript Ready">
   <img src="https://img.shields.io/badge/API-Express%20Like-green" alt="Express Like API">
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="MIT License">
-  <img src="https://img.shields.io/badge/Test%20Coverage-76%25-brightgreen" alt="Test Coverage">
+  <img src="https://coveralls.io/repos/github/gxlmyacc/request-iframe/badge.svg?branch=main" alt="Coverage Status">
 </p>
 
 ## 📑 目录
@@ -151,7 +151,7 @@ request-iframe 在 `postMessage` 基础上实现了一套类 HTTP 的通信协�
        │                                            │
        │  <──── RESPONSE ────────────────────────  │  返回结果
        │                                            │
-       │  ──── RECEIVED (可选) ──────────────────>  │  确认收到响应
+       │  ──── ACK (可选) ───────────────────────>  │  确认收到响应
        │                                            │
 ```
 
@@ -160,11 +160,10 @@ request-iframe 在 `postMessage` 基础上实现了一套类 HTTP 的通信协�
 | 类型 | 方向 | 说明 |
 |------|------|------|
 | `request` | Client → Server | 客户端发起请求 |
-| `ack` | Server → Client | 服务端确认收到请求（当请求 `requireAck` 开启时） |
+| `ack` | 接收方 → 发送方 | 回执确认（当消息 `requireAck: true` 且被接管/处理时发送；ACK-only） |
 | `async` | Server → Client | 通知客户端这是异步任务（handler 返回 Promise 时发送） |
 | `response` | Server → Client | 返回响应数据 |
 | `error` | Server → Client | 返回错误信息 |
-| `received` | Client → Server | 客户端确认收到响应/错误（可选，由响应的 `requireAck` 控制） |
 | `ping` | Client → Server | 连接检测（`isConnect()`；可使用 `requireAck` 确认投递） |
 | `pong` | Server → Client | 连接检测响应 |
 
@@ -860,18 +859,22 @@ interface WritableStreamOptions {
   streamTimeout?: number;     // 写侧空闲超时（ms，可选）：长时间未收到对端 pull/ack 时会做心跳确认并失败
   iterator?: () => AsyncGenerator;  // 数据生成迭代器
   next?: () => Promise<{ data: any; done: boolean }>;  // 数据生成函数
+  maxPendingChunks?: number;  // 写侧待发送缓冲上限（可选；push/长连接场景建议配置，避免 pendingQueue 无限增长）
+  maxPendingBytes?: number;   // 写侧待发送字节上限（可选；避免单次 write 超大 chunk 导致内存暴涨）
   metadata?: Record<string, any>;   // 自定义元数据
 }
 ```
 
 **流超时/保活：**
-- `streamTimeout`（请求参数）：读侧空闲超时（ms，可选）。消费 `response.stream` 时超过该时间未收到新的 chunk，会先做一次心跳确认，失败则认为流已断开并报错。
-- `streamTimeout`（流参数）：写侧空闲超时（ms，可选）。写侧在 pull/ack 协议下，若长时间未收到对端 `pull/ack`，会做心跳确认并失败（避免长时间无效占用）。
+- `streamTimeout`（请求参数）：读侧空闲超时（ms，可选）。消费 `response.stream` 时超过该时间未收到新的 chunk，会先做一次心跳确认（默认使用 `client.isConnect()`），失败则认为流已断开并报错。
+- `streamTimeout`（流参数）：写侧空闲超时（ms，可选）。写侧在 pull 协议下，若长时间未收到对端 `pull`，会做心跳确认并失败（避免长时间无效占用）。
 - `expireTimeout`（流参数）：写侧有效期；过期后会发送 `stream_error`，读侧会收到明确的“已过期”错误。
+- `maxPendingChunks`（流参数）：写侧待发送缓冲上限（可选）。对 `push` / 长连接场景很重要：当对端停止 pull 时，继续 `write()` 会在写侧积压，建议设置上限防止内存无限增长。
+- `maxPendingBytes`（流参数）：写侧待发送字节上限（可选）。用于防止单次写入超大 chunk（例如大字符串/大 Blob 包装）导致内存占用过高。
 
 **pull/ack 协议（新增，默认启用）：**
-- 读侧会自动发送 `stream_pull` 请求更多 chunk，并对每个收到的 chunk 自动发送 `stream_ack`。
-- 写侧只会在收到 `stream_pull` 后才继续发送 `stream_data`，实现真正的背压（按需拉取）。
+- 读侧会自动发送 `stream_pull` 请求更多 chunk；写侧只会在收到 `stream_pull` 后才继续发送 `stream_data`，实现真正的背压（按需拉取）。
+  - 断连检测不依赖 `stream_ack`，而是通过 `streamTimeout + 心跳(isConnect)` 来实现。
 
 **consume 默认行为（变更）：**
 - `for await (const chunk of stream)` 默认会 **消费并丢弃已迭代过的 chunk**（`consume: true`），避免长流场景内存无限增长。
@@ -896,9 +899,9 @@ Server 可以要求 Client 确认收到响应：
 ```typescript
 server.on('/api/important', async (req, res) => {
   // requireAck: true 表示需要客户端确认
-  const received = await res.send(data, { requireAck: true });
+  const acked = await res.send(data, { requireAck: true });
   
-  if (received) {
+  if (acked) {
     console.log('客户端已确认收到');
   } else {
     console.log('客户端未确认（超时）');
@@ -906,7 +909,7 @@ server.on('/api/important', async (req, res) => {
 });
 ```
 
-> **说明**：当响应/错误被客户端“接管”（即存在对应的 pending request）时，库会自动发送 `received`，无需业务侧手动发送。
+> **说明**：当响应/错误被客户端“接管”（即存在对应的 pending request）时，库会自动发送 `ack`，无需业务侧手动发送。
 
 ### 追踪模式
 
@@ -975,6 +978,65 @@ setMessages({
 - **必须持有对方页面的 `Window` 引用**（例如 `window.open()` 返回值、`window.opener`、或 `MessageEvent.source`）。
 - **无法**通过 URL 给“任意标签页”发消息。
 - 安全起见，建议显式设置 `targetOrigin`，并配置 `allowedOrigins` / `validateOrigin`。
+
+**生产环境推荐配置（模板）：**
+
+```typescript
+import { requestIframeClient, requestIframeServer } from 'request-iframe';
+
+/**
+ * 建议：明确限定 3 件事
+ * - secretKey：隔离不同业务/不同实例，避免消息串线
+ * - targetOrigin：发送时的 targetOrigin（Window 场景强烈建议不要用 '*'）
+ * - allowedOrigins / validateOrigin：接收时的 origin 白名单校验
+ */
+const secretKey = 'my-app';
+const targetOrigin = 'https://child.example.com';
+const allowedOrigins = [targetOrigin];
+
+// Client（父页）
+const client = requestIframeClient(window.open(targetOrigin)!, {
+  secretKey,
+  targetOrigin,
+  allowedOrigins
+});
+
+// Server（子页/iframe 内）
+const server = requestIframeServer({
+  secretKey,
+  allowedOrigins,
+  // 防止异常/攻击导致消息爆炸（按需设置）
+  maxConcurrentRequestsPerClient: 50
+});
+```
+
+**生产环境推荐配置（iframe 场景模板）：**
+
+```typescript
+import { requestIframeClient, requestIframeServer } from 'request-iframe';
+
+/**
+ * iframe 场景通常可以从 iframe.src 推导 targetOrigin，并用它作为 allowedOrigins 白名单。
+ */
+const iframe = document.querySelector('iframe')!;
+const targetOrigin = new URL(iframe.src).origin;
+const secretKey = 'my-app';
+
+// Client（父页）
+const client = requestIframeClient(iframe, {
+  secretKey,
+  // 可显式写出来（即使库内部也会默认推导），便于审计/避免误用 '*'
+  targetOrigin,
+  allowedOrigins: [targetOrigin]
+});
+
+// Server（iframe 内）
+const server = requestIframeServer({
+  secretKey,
+  allowedOrigins: [targetOrigin],
+  maxConcurrentRequestsPerClient: 50
+});
+```
 
 **示例：**
 
