@@ -26,6 +26,8 @@
     "build-react:types": "tsc -p react/tsconfig.json --emitDeclarationOnly",
     "build-react:js": "babel react/src --config-file ./react/babel.config.js --out-dir react/library --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\",\"**/*.d.ts\",\"**/*.d.ts.map\"",
     "build-react:js:esm": "babel react/src --config-file ./react/babel.esm.config.js --out-dir react/esm --extensions .ts,.tsx --copy-files --ignore \"**/__tests__/**\",\"**/*.test.ts\",\"**/*.test.tsx\",\"**/*.d.ts\",\"**/*.d.ts.map\"",
+    "build:cdn:preclean": "node scripts/preclean-cdn.js",
+    "build:cdn": "rollup -c rollup.cdn.config.mjs",
     "build:clean": "node scripts/clean-build.js",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -37,6 +39,7 @@
   "files": [
     "library",
     "esm",
+    "cdn",
     "react/library",
     "react/esm",
     "react/package.json",
@@ -60,7 +63,7 @@
   "author": "gxlmyacc",
   "license": "MIT",
   "dependencies": {
-    "core-js": "^3.48.0"
+    "core-js": "^3"
   },
   "peerDependencies": {
     "react": ">=16.8.0"
@@ -77,6 +80,9 @@
     "@babel/preset-env": "^7.28.6",
     "@babel/preset-typescript": "^7.28.5",
     "@babel/runtime": "^7.28.6",
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^0.4.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/jest": "^29.5.12",
@@ -91,6 +97,7 @@
     "jest-environment-jsdom": "^29.7.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "rollup": "^4.57.1",
     "ts-jest": "^29.1.2",
     "typescript": "^5.3.3"
   }

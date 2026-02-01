@@ -56,5 +56,7 @@ runNpm(['run', 'build:js:esm']);
 runNpm(['run', 'build-react:types']);
 runNpm(['run', 'build-react:js']);
 runNpm(['run', 'build-react:js:esm']);
+runNpm(['run', 'build:cdn:preclean']);
+runNpm(['run', 'build:cdn']);
 runNpm(['run', 'build:clean']);
 

@@ -28,6 +28,12 @@ module.exports = {
   },
   "overrides": [
     {
+      "files": ["rollup.cdn.config.mjs"],
+      "parserOptions": {
+        "project": null
+      }
+    },
+    {
       "files": ["react/**/*.ts", "react/**/*.tsx"],
       "parserOptions": {
         "project": "./react/tsconfig.json",

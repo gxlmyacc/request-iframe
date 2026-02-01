@@ -94,6 +94,30 @@ pnpm add request-iframe
 
 **TypeScript**: Built-in complete type definitions, no need to install `@types/request-iframe`
 
+## CDN (UMD bundles)
+
+This repo also builds **script-tag friendly UMD bundles** (core + react hooks) that can be hosted on a CDN.
+
+- Core bundle output: `cdn/request-iframe.umd(.min).js` → global `RequestIframe`
+- React bundle output: `cdn/request-iframe-react.umd(.min).js` → global `RequestIframeReact` (requires `React` global and `RequestIframe` global)
+
+Example (using unpkg):
+
+```html
+<!-- Core -->
+<script src="https://unpkg.com/request-iframe@latest/cdn/request-iframe.umd.min.js"></script>
+
+<!-- React (optional) -->
+<script src="https://unpkg.com/react@latest/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/request-iframe@latest/cdn/request-iframe-react.umd.min.js"></script>
+
+<script>
+  const { requestIframeClient, requestIframeServer, requestIframeEndpoint } = RequestIframe;
+  // React hooks are available on RequestIframeReact (e.g. RequestIframeReact.useClient)
+  console.log(!!requestIframeClient, !!requestIframeServer, !!requestIframeEndpoint);
+<\/script>
+```
+
 ## Quick Start
 
 ### 1. Parent Page (Client Side)

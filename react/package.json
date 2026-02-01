@@ -14,7 +14,8 @@
   "sideEffects": false,
   "files": [
     "library",
-    "esm"
+    "esm",
+    "cdn"
   ],
   "peerDependencies": {
     "react": ">=16.8.0",

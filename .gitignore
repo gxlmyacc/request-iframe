@@ -1,6 +1,7 @@
 node_modules/
 library/
 esm/
+cdn/
 react/library/
 react/esm/
 coverage/

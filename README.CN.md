@@ -94,6 +94,32 @@ pnpm add request-iframe
 
 **TypeScript**: 内置完整类型定义，无需安装 `@types/request-iframe`
 
+## CDN（UMD bundle）
+
+本项目也支持构建 **可直接用 `<script>` 引入的 UMD bundle**（核心 + React hooks），方便放到 CDN 上。
+
+- 核心 bundle 输出：`cdn/request-iframe.umd(.min).js` → 全局变量 `RequestIframe`
+- React bundle 输出：`cdn/request-iframe-react.umd(.min).js` → 全局变量 `RequestIframeReact`
+  - 依赖 `React` 全局变量（即 `react` 的 UMD 版本）
+  - 依赖 `RequestIframe` 全局变量（先加载核心 bundle）
+
+示例（使用 unpkg）：
+
+```html
+<!-- 核心 -->
+<script src="https://unpkg.com/request-iframe@latest/cdn/request-iframe.umd.min.js"></script>
+
+<!-- React（可选） -->
+<script src="https://unpkg.com/react@latest/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/request-iframe@latest/cdn/request-iframe-react.umd.min.js"></script>
+
+<script>
+  const { requestIframeClient, requestIframeServer, requestIframeEndpoint } = RequestIframe;
+  // React hooks 在 RequestIframeReact 上（例如 RequestIframeReact.useClient）
+  console.log(!!requestIframeClient, !!requestIframeServer, !!requestIframeEndpoint);
+<\/script>
+```
+
 ## 快速开始
 
 ### 1. 父页面（Client 端）

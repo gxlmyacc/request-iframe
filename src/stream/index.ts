@@ -8,7 +8,8 @@ export { IframeWritableStream } from './writable-stream';
 export { IframeFileWritableStream } from './file-stream';
 
 // Readable stream (client-side)
-export { IframeReadableStream, StreamMessageHandler } from './readable-stream';
+export { IframeReadableStream } from './readable-stream';
+export type { StreamMessageHandler } from './readable-stream';
 export { IframeFileReadableStream } from './file-stream';
 
 // Type checking utility functions
