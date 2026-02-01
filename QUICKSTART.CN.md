@@ -220,9 +220,11 @@ server.on('/api/users/:id', (req, res) => {
 开启 trace 模式查看详细日志：
 
 ```typescript
+import { LogLevel } from 'request-iframe';
+
 const client = requestIframeClient(iframe, { 
   secretKey: 'my-app',
-  trace: true  // 开启调试日志
+  trace: LogLevel.INFO  // 输出 info/warn/error（也可以用 true 开启 TRACE）
 });
 
 const server = requestIframeServer({ 
@@ -293,4 +295,4 @@ console.log(response.data.name); // TypeScript 知道这是 string
 
 - 查看 [README.CN.md](./README.CN.md) 了解完整 API（中文）
 - 查看 [README.md](./README.md) 了解完整 API（English）
-- 查看 [src/__tests__](./src/__tests__) 目录下的测试用例获取更多示例
+- 查看 [`__tests__/`](./__tests__) 与 [`react/__tests__/`](./react/__tests__) 下的测试用例获取更多示例

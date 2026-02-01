@@ -3,6 +3,7 @@ import {
 } from '../types';
 import { isValidPostMessage, createPostMessage, isWindowAvailable } from '../utils';
 import { OriginConstant } from '../constants';
+import { requestIframeLog } from '../utils/logger';
 
 /**
  * Message context (extracted from MessageEvent, transport-agnostic)
@@ -150,7 +151,7 @@ export class MessageChannel {
       try {
         receiver(data, context);
       } catch (e) {
-        console.error('[request-iframe] Receiver error:', e);
+        requestIframeLog('error', 'Receiver error', e);
       }
     });
   }

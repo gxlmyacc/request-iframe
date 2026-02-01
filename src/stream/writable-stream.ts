@@ -276,7 +276,7 @@ export class IframeWritableStream
       this.clearExpireTimer();
       // For most stream messages, if we cannot send, treat as a hard cancellation signal
       // so callers can stop further processing immediately.
-      throw new Error(formatMessage(Messages.STREAM_CANCELLED, 'Target window closed'));
+      throw new Error(formatMessage(Messages.STREAM_CANCELLED, Messages.TARGET_WINDOW_CLOSED));
     }
     return true;
   }
@@ -571,7 +571,7 @@ export class IframeWritableStream
     if (!ok) {
       this._state = StreamStateConstant.CANCELLED;
       this.clearExpireTimer();
-      throw new Error(formatMessage(Messages.STREAM_CANCELLED, 'Target window closed'));
+      throw new Error(formatMessage(Messages.STREAM_CANCELLED, Messages.TARGET_WINDOW_CLOSED));
     }
     this.emit(StreamEvent.SEND, { seq, done });
   }

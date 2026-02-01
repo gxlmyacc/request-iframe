@@ -76,6 +76,7 @@ In micro-frontend, iframe nesting, and popup window scenarios, cross-page commun
 - 🔒 **Message Isolation** - secretKey mechanism prevents message cross-talk between multiple instances
 - 📁 **File Transfer** - File transfer via streams (client↔server)
 - 🌊 **Streaming** - Support for large file chunked transfer, supports async iterators
+- 🧾 **Leveled Logging** - Warn/Error logs enabled by default; can be configured via `trace` level
 - 🌍 **Internationalization** - Error messages can be customized for i18n
 - ✅ **Protocol Versioning** - Built-in version control for upgrade compatibility
 
@@ -129,6 +130,11 @@ server.on('/api/getUserInfo', (req, res) => {
 That's it! 🎉
 
 > 💡 **Tip**: For more quick start guides, see [QUICKSTART.md](./QUICKSTART.md) or [QUICKSTART.CN.md](./QUICKSTART.CN.md) (中文)
+
+## Which API should I use?
+
+- **Use `requestIframeClient()` + `requestIframeServer()`** when communication is mostly one-way (parent → iframe), and you prefer a clear separation between request sender and handler.
+- **Use `requestIframeEndpoint()`** when you need **bidirectional** communication (both sides need `send()` + `on()/use()/map()`), or when you want a single façade object to debug a full flow more easily.
 
 ---
 
@@ -872,17 +878,21 @@ server.on('/api/important', async (req, res) => {
 
 ### Trace Mode
 
-Enable trace mode to view detailed communication logs in console:
+By default, request-iframe only prints **warn/error** logs (to avoid noisy console in production).
+
+Enable trace mode (or set a log level) to view detailed communication logs:
 
 ```typescript
+import { LogLevel } from 'request-iframe';
+
 const client = requestIframeClient(iframe, { 
   secretKey: 'demo',
-  trace: true 
+  trace: true // equivalent to LogLevel.TRACE
 });
 
 const server = requestIframeServer({ 
   secretKey: 'demo',
-  trace: true 
+  trace: LogLevel.INFO // enable info/warn/error logs (less verbose than trace)
 });
 
 // Console output:
@@ -890,6 +900,14 @@ const server = requestIframeServer({
 // [request-iframe] [INFO] 📨 ACK Received { requestId: '...' }
 // [request-iframe] [INFO] ✅ Request Success { status: 200, data: {...} }
 ```
+
+`trace` supports:
+- `true` / `false`
+- `'trace' | 'info' | 'warn' | 'error' | 'silent'` (or `LogLevel.*`)
+
+Notes:
+- When `trace` is `LogLevel.TRACE` or `LogLevel.INFO`, the library will also attach built-in debug interceptors/listeners for richer request/response logs.
+- When `trace` is `LogLevel.WARN` / `LogLevel.ERROR` / `LogLevel.SILENT`, it only affects log output level (no extra debug interceptors attached).
 
 ### Internationalization
 
@@ -921,7 +939,7 @@ Create a Client instance.
 |-----------|------|-------------|
 | `target` | `HTMLIFrameElement \| Window` | Target iframe element or window object |
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
-| `options.trace` | `boolean` | Whether to enable trace mode (optional) |
+| `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | Trace/log level (optional). Default logs are warn/error only |
 | `options.targetOrigin` | `string` | Override postMessage targetOrigin for sending (optional). If `target` is a `Window`, default is `*`. |
 | `options.ackTimeout` | `number` | Global default ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Global default request timeout (ms), default 5000 |
@@ -1006,13 +1024,72 @@ Create a Server instance.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
-| `options.trace` | `boolean` | Whether to enable trace mode (optional) |
+| `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | Trace/log level (optional). Default logs are warn/error only |
 | `options.ackTimeout` | `number` | Wait for client acknowledgment timeout (ms), default 1000 |
 | `options.maxConcurrentRequestsPerClient` | `number` | Max concurrent in-flight requests per client (per origin + creatorId). Default Infinity |
 | `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | Allowlist for incoming message origins (optional, recommended for production) |
 | `options.validateOrigin` | `(origin, data, context) => boolean` | Custom origin validator (optional, higher priority than `allowedOrigins`) |
 
 **Returns:** `RequestIframeServer`
+
+### requestIframeEndpoint(target, options?)
+
+Create an **endpoint facade** (client + server) for a peer window/iframe.
+
+It can:
+- **send requests** to the peer: `endpoint.send(...)`
+- **handle requests** from the peer: `endpoint.on(...)`, `endpoint.use(...)`, `endpoint.map(...)`
+
+Notes:
+- Client and server instances are **lazily created** (only when you first access send/handlers APIs).
+- `options.id` (if provided) becomes the shared ID for both sides (client + server); otherwise a random one is generated.
+- `options.trace` follows the same leveled logging rules as client/server (`LogLevel.*` recommended).
+
+Example (bidirectional via endpoint, recommended):
+
+```typescript
+import { requestIframeEndpoint, LogLevel } from 'request-iframe';
+
+// Parent page (has iframe element)
+const iframe = document.querySelector('iframe')!;
+const parentEndpoint = requestIframeEndpoint(iframe, {
+  secretKey: 'demo',
+  trace: LogLevel.INFO
+});
+parentEndpoint.on('/notify', (req, res) => res.send({ ok: true, echo: req.body }));
+
+// Iframe page (has window.parent)
+const iframeEndpoint = requestIframeEndpoint(window.parent, {
+  secretKey: 'demo',
+  targetOrigin: 'https://parent.example.com',
+  trace: true
+});
+iframeEndpoint.on('/api/ping', (req, res) => res.send({ ok: true }));
+
+// Either side can now send + handle
+await parentEndpoint.send('/api/ping', { from: 'parent' });
+await iframeEndpoint.send('/notify', { from: 'iframe' });
+```
+
+Production configuration template (recommended):
+
+```typescript
+import { requestIframeEndpoint, LogLevel } from 'request-iframe';
+
+const secretKey = 'my-app';
+const iframe = document.querySelector('iframe')!;
+const targetOrigin = new URL(iframe.src).origin;
+
+const endpoint = requestIframeEndpoint(iframe, {
+  secretKey,
+  targetOrigin,
+  allowedOrigins: [targetOrigin],
+  // Mitigate message explosion (tune as needed)
+  maxConcurrentRequestsPerClient: 50,
+  // Logs: default is warn/error; choose info for debugging
+  trace: LogLevel.WARN
+});
+```
 
 ### Client API
 
@@ -1591,7 +1668,11 @@ Just ensure both sides use the same `secretKey`.
 
 ### 4. Can Server actively push messages?
 
-request-iframe is request-response mode, Server cannot actively push. For bidirectional communication, you can create a Client inside the iframe:
+request-iframe is request-response mode, Server cannot actively push by itself.
+
+For bidirectional communication, you have 2 options:
+- Create a reverse `client` inside the iframe (traditional way)
+- Use `requestIframeEndpoint()` on both sides (recommended) so each side has **send + handle** in one object
 
 ```typescript
 // Inside iframe
@@ -1604,10 +1685,11 @@ await client.send('/notify', { event: 'data-changed' });
 
 ### 5. How to debug communication issues?
 
-1. **Enable trace mode**: View detailed communication logs
+1. **Enable logs with levels**: by default only warn/error logs are printed; enable `trace: LogLevel.INFO` (or `trace: true`) to see detailed logs
 2. **Check secretKey**: Ensure Client and Server use the same secretKey
 3. **Check iframe loading**: Ensure iframe is fully loaded
-4. **Check console**: Check for cross-origin errors
+4. **Check origin constraints**: prefer setting strict `targetOrigin` and configure `allowedOrigins` / `validateOrigin`
+5. **Consider using `requestIframeEndpoint()`**: it unifies both directions (send + handle) and makes it easier to debug flows in one place
 
 ---
 
@@ -1659,12 +1741,7 @@ yarn build
 
 ### Test Coverage
 
-The project currently has **76.88%** test coverage, meeting production requirements:
-
-- **Statement Coverage**: 76.88%
-- **Branch Coverage**: 64.13%
-- **Function Coverage**: 75%
-- **Line Coverage**: 78.71%
+The project maintains **high test coverage** and CI coverage reports (see badges at the top of this README).
 
 Coverage reports are generated in the `coverage/` directory, view detailed coverage report via `coverage/index.html`.
 

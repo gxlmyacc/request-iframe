@@ -220,9 +220,11 @@ server.on('/api/users/:id', (req, res) => {
 Enable trace mode to view detailed logs:
 
 ```typescript
+import { LogLevel } from 'request-iframe';
+
 const client = requestIframeClient(iframe, { 
   secretKey: 'my-app',
-  trace: true  // Enable debug logs
+  trace: LogLevel.INFO  // Enable info/warn/error logs (or use true for TRACE)
 });
 
 const server = requestIframeServer({ 
@@ -293,4 +295,4 @@ console.log(response.data.name); // TypeScript knows this is string
 
 - View [README.md](./README.md) for complete API documentation (English)
 - View [README.CN.md](./README.CN.md) for complete API documentation (中文)
-- Check [src/__tests__](./src/__tests__) directory for more examples from test cases
+- Check [`__tests__/`](./__tests__) and [`react/__tests__/`](./react/__tests__) for more examples from test cases

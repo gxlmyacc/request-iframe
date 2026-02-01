@@ -1,4 +1,5 @@
 import { MessageRoleValue } from '../constants';
+import type { LogLevelValue } from '../constants';
 
 /**
  * Request default configuration
@@ -481,28 +482,6 @@ export interface RequestIframeClient {
 }
 
 /**
- * Client server interface (used on client side, handles responses only)
- */
-export interface RequestIframeClientServer {
-  /** Destroy server (remove message listener) */
-  destroy(): void;
-  /** Internal method: listen to low-level events */
-  _on(event: ServerEventName, fn: (payload: any) => void): void;
-  /** Internal method: unsubscribe from low-level events */
-  _off(event: ServerEventName, fn?: (payload: any) => void): void;
-  /** Internal method: for client to register pending Promise for response */
-  _registerPendingRequest(
-    requestId: string,
-    resolve: (data: PostMessageData) => void,
-    reject: (error: Error) => void,
-    origin?: string,
-    originValidator?: OriginValidator
-  ): void;
-  /** Internal method: for client to cancel waiting */
-  _unregisterPendingRequest(requestId: string): void;
-}
-
-/**
  * Server interface (used on server side, handles requests and responses)
  */
 export interface RequestIframeServer {
@@ -534,6 +513,18 @@ export interface RequestIframeServer {
 }
 
 /**
+ * Log level (used by built-in logger and trace option).
+ */
+export type RequestIframeLogLevel = LogLevelValue;
+
+/**
+ * Trace option:
+ * - boolean: enable/disable trace (true => 'trace')
+ * - level: explicitly set a log level
+ */
+export type RequestIframeTraceOption = boolean | RequestIframeLogLevel;
+
+/**
  * requestIframeClient entry options
  */
 export interface RequestIframeClientOptions extends RequestDefaults {
@@ -562,7 +553,7 @@ export interface RequestIframeClientOptions extends RequestDefaults {
    * Whether to enable trace mode.
    * If true, logs will be printed at various points such as before and after requests.
    */
-  trace?: boolean;
+  trace?: RequestIframeTraceOption;
   /**
    * Initial request headers.
    * Values can be static strings/arrays or functions that dynamically generate headers based on request config.
@@ -606,7 +597,7 @@ export interface RequestIframeServerOptions extends Pick<RequestDefaults, 'ackTi
    * Whether to enable trace mode.
    * If true, logs will be printed at various points such as before and after requests, server receive/respond, etc.
    */
-  trace?: boolean;
+  trace?: RequestIframeTraceOption;
   /**
    * Allowed origins for incoming messages (request/ping/received/stream, etc.).
    * This is a best-practice security control for production usage.

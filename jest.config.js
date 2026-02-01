@@ -1,10 +1,10 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'jsdom',
-  roots: ['<rootDir>/src', '<rootDir>/react/src'],
+  roots: ['<rootDir>/__tests__', '<rootDir>/react/__tests__'],
   testMatch: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx', '**/?(*.)+(spec|test).ts', '**/?(*.)+(spec|test).tsx'],
   testPathIgnorePatterns: [
-    '<rootDir>/src/__tests__/test-utils/'
+    '<rootDir>/__tests__/test-utils/'
   ],
   collectCoverageFrom: [
     'src/**/*.ts',

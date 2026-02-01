@@ -4,6 +4,8 @@ import {
 } from '../types';
 import { getProtocolVersion, createPostMessage } from '../utils';
 import { getAckId, getAckMeta } from '../utils/ack';
+import { SyncHook } from '../utils/hooks';
+import { requestIframeLog } from '../utils/logger';
 import { MessageChannel, type MessageContext } from './channel';
 
 /**
@@ -67,6 +69,13 @@ interface MessageHandlerEntry {
  * It works with transport-agnostic MessageContext instead of transport-specific MessageEvent.
  */
 export class MessageDispatcher {
+  public readonly hooks = {
+    inbound: new SyncHook<[data: PostMessageData, context: MessageContext]>(),
+    beforeSend: new SyncHook<[target: Window, targetOrigin: string, message: PostMessageData]>(),
+    afterSend: new SyncHook<[target: Window, targetOrigin: string, message: PostMessageData, ok: boolean]>(),
+    sendError: new SyncHook<[target: Window, targetOrigin: string, message: PostMessageData, error: any]>()
+  };
+
   /** Secret key for message isolation */
   public readonly secretKey?: string;
   
@@ -234,6 +243,8 @@ export class MessageDispatcher {
       }
     }
 
+    this.hooks.inbound.call(data, context);
+
     const type = data.type as string;
     const version = getProtocolVersion(data);
 
@@ -294,7 +305,7 @@ export class MessageDispatcher {
           // If context.handledBy is set by the handler, subsequent handlers will be skipped
         } catch (e) {
           // Ignore handler exception, continue executing other handlers
-          console.error('[request-iframe] Handler error:', e);
+          requestIframeLog('error', 'Handler error', e);
         }
       }
     }
@@ -397,7 +408,15 @@ export class MessageDispatcher {
     if (message.creatorId === undefined && this.instanceId) {
       message.creatorId = this.instanceId;
     }
-    return this.channel.send(target, message, targetOrigin);
+    this.hooks.beforeSend.call(target, targetOrigin, message);
+    try {
+      const ok = this.channel.send(target, message, targetOrigin);
+      this.hooks.afterSend.call(target, targetOrigin, message, ok);
+      return ok;
+    } catch (e) {
+      this.hooks.sendError.call(target, targetOrigin, message, e);
+      throw e;
+    }
   }
 
   /**
@@ -423,7 +442,7 @@ export class MessageDispatcher {
       creatorId: this.instanceId,
       secretKey: this.secretKey
     } as any);
-    return this.channel.send(target, message, targetOrigin);
+    return this.send(target, message, targetOrigin);
   }
 
   // ==================== Utilities ====================

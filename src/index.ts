@@ -1,10 +1,10 @@
 // API
 export { requestIframeClient, clearRequestIframeClientCache } from './api/client';
 export { requestIframeServer, clearRequestIframeServerCache } from './api/server';
+export { requestIframeEndpoint } from './api/endpoint';
 // Implementation classes
-export { RequestIframeClientImpl } from './core/client';
-export { RequestIframeServerImpl } from './core/server';
-export { RequestIframeClientServer } from './core/client-server';
+export { RequestIframeClientImpl } from './impl/client';
+export { RequestIframeServerImpl } from './impl/server';
 // MessageChannel and MessageDispatcher
 export { MessageChannel, ChannelType, MessageDispatcher } from './message';
 export type {
@@ -21,8 +21,8 @@ export {
   releaseMessageChannel,
   clearMessageChannelCache,
 } from './utils/cache';
-export { ServerRequestImpl } from './core/request';
-export { ServerResponseImpl } from './core/response';
+export { ServerRequestImpl } from './impl/request';
+export { ServerResponseImpl } from './impl/response';
 // Stream
 export {
   IframeWritableStream,

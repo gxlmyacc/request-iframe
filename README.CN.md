@@ -76,6 +76,7 @@
 - 🔒 **消息隔离** - secretKey 机制避免多实例消息串线
 - 📁 **文件传输** - 支持文件通过流方式传输（Client↔Server）
 - 🌊 **流式传输** - 支持大文件分块传输，支持异步迭代器
+- 🧾 **分级日志** - 默认只输出 warn/error，可通过 `trace` 设置日志等级与调试日志
 - 🌍 **多语言** - 错误消息可自定义，便于国际化
 - ✅ **协议版本** - 内置版本控制，便于升级兼容
 
@@ -129,6 +130,11 @@ server.on('/api/getUserInfo', (req, res) => {
 就这么简单！🎉
 
 > 💡 **提示**: 更多快速上手指南请查看 [QUICKSTART.CN.md](./QUICKSTART.CN.md) 或 [QUICKSTART.md](./QUICKSTART.md) (English)
+
+## 该用哪个 API？
+
+- **优先使用 `requestIframeClient()` + `requestIframeServer()`**：适用于主要是单向通信（父页 → iframe），并且你希望把“发送请求”和“处理请求”职责明确分开。
+- **优先使用 `requestIframeEndpoint()`**：适用于需要 **双向通信**（双方都需要 `send()` + `on()/use()/map()`），或者你希望用一个门面对象更方便地串起全链路做调试。
 
 ---
 
@@ -913,17 +919,21 @@ server.on('/api/important', async (req, res) => {
 
 ### 追踪模式
 
-开启追踪模式可以在控制台查看详细的通信日志：
+默认情况下，request-iframe 只会输出 **warn/error** 日志（避免生产环境控制台过于吵闹）。
+
+开启追踪模式（或设置日志等级）可以在控制台查看更详细的通信日志：
 
 ```typescript
+import { LogLevel } from 'request-iframe';
+
 const client = requestIframeClient(iframe, { 
   secretKey: 'demo',
-  trace: true 
+  trace: true // 等价于 LogLevel.TRACE
 });
 
 const server = requestIframeServer({ 
   secretKey: 'demo',
-  trace: true 
+  trace: LogLevel.INFO // 输出 info/warn/error（比 trace 更克制）
 });
 
 // 控制台输出：
@@ -931,6 +941,14 @@ const server = requestIframeServer({
 // [request-iframe] [INFO] 📨 ACK Received { requestId: '...' }
 // [request-iframe] [INFO] ✅ Request Success { status: 200, data: {...} }
 ```
+
+`trace` 支持：
+- `true` / `false`
+- `'trace' | 'info' | 'warn' | 'error' | 'silent'`（或 `LogLevel.*`）
+
+说明：
+- 当 `trace` 为 `LogLevel.TRACE` / `LogLevel.INFO` 时，库会额外挂载内置的调试拦截器/监听器，以输出更丰富的 request/response 日志。
+- 当 `trace` 为 `LogLevel.WARN` / `LogLevel.ERROR` / `LogLevel.SILENT` 时，只影响日志输出等级（不会额外挂载调试拦截器）。
 
 ### 多语言支持
 
@@ -962,7 +980,7 @@ setMessages({
 |------|------|------|
 | `target` | `HTMLIFrameElement \| Window` | 目标 iframe 元素或 window 对象 |
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
-| `options.trace` | `boolean` | 是否开启追踪模式（可选） |
+| `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | trace/日志等级（可选）。默认只输出 warn/error |
 | `options.targetOrigin` | `string` | 覆盖 postMessage 的 targetOrigin（可选）。当 `target` 是 `Window` 时默认 `*`；当 `target` 是 iframe 时默认取 `iframe.src` 的 origin。 |
 | `options.ackTimeout` | `number` | 全局默认 ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 全局默认请求超时（ms），默认 5000 |
@@ -1064,13 +1082,72 @@ await client.send('/api/longTask', {}, {
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
-| `options.trace` | `boolean` | 是否开启追踪模式（可选） |
+| `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | trace/日志等级（可选）。默认只输出 warn/error |
 | `options.ackTimeout` | `number` | 等待客户端确认超时（ms），默认 1000 |
 | `options.maxConcurrentRequestsPerClient` | `number` | 每个客户端的最大并发 in-flight 请求数（按 origin + creatorId 维度），默认 Infinity |
 | `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | 接收消息的 origin 白名单（可选，生产环境强烈建议配置） |
 | `options.validateOrigin` | `(origin, data, context) => boolean` | 自定义 origin 校验函数（可选，优先级高于 `allowedOrigins`） |
 
 **返回值：** `RequestIframeServer`
+
+### requestIframeEndpoint(target, options?)
+
+创建一个 **endpoint 门面**（client + server）并绑定到某个对端窗口/iframe。
+
+它可以：
+- **向对端发送请求**：`endpoint.send(...)`
+- **处理对端发来的请求**：`endpoint.on(...)` / `endpoint.use(...)` / `endpoint.map(...)`
+
+说明：
+- 内部的 client/server 是 **懒创建** 的（只有首次使用发送/注册 handler 等能力时才会创建）。
+- 如果传了 `options.id`，它会作为 client+server 的共享 id；不传则会自动生成一个。
+- `options.trace` 与 client/server 一致，推荐用 `LogLevel.*` 来配置日志等级。
+
+示例（使用 endpoint 做双向通信，推荐）：
+
+```typescript
+import { requestIframeEndpoint, LogLevel } from 'request-iframe';
+
+// 父页面（持有 iframe 元素）
+const iframe = document.querySelector('iframe')!;
+const parentEndpoint = requestIframeEndpoint(iframe, {
+  secretKey: 'demo',
+  trace: LogLevel.INFO
+});
+parentEndpoint.on('/notify', (req, res) => res.send({ ok: true, echo: req.body }));
+
+// iframe 页面（持有 window.parent）
+const iframeEndpoint = requestIframeEndpoint(window.parent, {
+  secretKey: 'demo',
+  targetOrigin: 'https://parent.example.com',
+  trace: true
+});
+iframeEndpoint.on('/api/ping', (req, res) => res.send({ ok: true }));
+
+// 任意一侧都可以 send + handle
+await parentEndpoint.send('/api/ping', { from: 'parent' });
+await iframeEndpoint.send('/notify', { from: 'iframe' });
+```
+
+生产环境推荐配置（模板）：
+
+```typescript
+import { requestIframeEndpoint, LogLevel } from 'request-iframe';
+
+const secretKey = 'my-app';
+const iframe = document.querySelector('iframe')!;
+const targetOrigin = new URL(iframe.src).origin;
+
+const endpoint = requestIframeEndpoint(iframe, {
+  secretKey,
+  targetOrigin,
+  allowedOrigins: [targetOrigin],
+  // 防止异常/攻击导致消息爆炸（按需设置）
+  maxConcurrentRequestsPerClient: 50,
+  // 日志：默认只输出 warn/error；调试时可切到 LogLevel.INFO / LogLevel.TRACE
+  trace: LogLevel.WARN
+});
+```
 
 ### Client API
 
@@ -1672,7 +1749,10 @@ import {
   // 多语言消息
   Messages,
   setMessages,
-  formatMessage
+  formatMessage,
+
+  // 日志等级
+  LogLevel
 } from 'request-iframe';
 ```
 
@@ -1763,7 +1843,11 @@ const server = requestIframeServer();
 
 ### 4. Server 可以主动推送消息吗？
 
-request-iframe 是请求-响应模式，Server 不能主动推送。如需双向通信，可以让 iframe 内也创建 Client：
+request-iframe 是请求-响应模式，Server 本身不能“主动推送”。
+
+如需双向通信，有两种做法：
+- iframe 内创建一个反向的 Client（传统做法）
+- 双方都使用 `requestIframeEndpoint()`（推荐），一个对象同时具备 **send + handle**
 
 ```typescript
 // iframe 内
@@ -1776,10 +1860,11 @@ await client.send('/notify', { event: 'data-changed' });
 
 ### 5. 如何调试通信问题？
 
-1. **开启 trace 模式**：查看详细的通信日志
-2. **检查 secretKey**：确保 Client 和 Server 使用相同的 secretKey
+1. **按日志等级开启输出**：默认只输出 warn/error；建议设置 `trace: LogLevel.INFO`（或 `trace: true`）来输出更详细的通信日志
+2. **检查 secretKey**：确保双方使用相同的 `secretKey`
 3. **检查 iframe 加载**：确保 iframe 已完全加载
-4. **检查控制台**：查看是否有跨域错误
+4. **检查 origin 约束**：尽量设置严格的 `targetOrigin`，并配置 `allowedOrigins` / `validateOrigin`，避免因为校验失败导致消息被忽略
+5. **考虑使用 `requestIframeEndpoint()`**：把双向（send + handle）能力合在一个对象里，更容易串起完整链路做排查
 
 ### 6. 支持哪些浏览器？
 
@@ -1833,27 +1918,10 @@ client.interceptors.response.use(
 );
 ```
 
-### 9. 如何调试通信问题？
+### 9. trace/日志等级怎么用？
 
-1. **开启 trace 模式**：在创建 client/server 时设置 `trace: true`
-2. **检查控制台**：查看详细的通信日志
-3. **验证 secretKey**：确保 client 和 server 使用相同的 secretKey
-4. **检查 iframe 加载**：确保 iframe 已完全加载后再发送请求
-5. **使用 `isConnect()`**：先检测连接是否正常
-
-```typescript
-// 开启调试模式
-const client = requestIframeClient(iframe, { 
-  secretKey: 'my-app',
-  trace: true  // 开启详细日志
-});
-
-// 检测连接
-const connected = await client.isConnect();
-if (!connected) {
-  console.error('无法连接到 iframe');
-}
-```
+- 推荐优先使用常量：`trace: LogLevel.INFO` / `trace: LogLevel.TRACE`
+- 如果你在做双向排查，推荐使用 `requestIframeEndpoint()` 并把 trace 打开（这样 send/handle 都在同一对象上更直观）
 
 ### 10. 性能如何？
 
@@ -1927,14 +1995,16 @@ yarn build
 request-iframe/
 ├── src/
 │   ├── api/              # 对外 API（client.ts, server.ts）
-│   ├── core/             # 核心实现（client, server, request, response）
+│   ├── impl/             # 实现层（client, server, request, response）
+│   ├── endpoint/         # endpoint 基础设施（hub/inbox/outbox + stream/heartbeat 等）
 │   ├── message/          # 消息通信层（channel, dispatcher）
 │   ├── stream/           # 流式传输实现
 │   ├── interceptors/    # 拦截器实现
 │   ├── utils/            # 工具函数
 │   ├── constants/        # 常量定义
 │   ├── types/            # TypeScript 类型定义
-│   └── __tests__/        # 测试文件
+├── __tests__/             # 测试文件（Jest）
+├── react/__tests__/       # React hooks 测试
 ├── library/              # 构建输出
 ├── coverage/             # 测试覆盖率报告
 ├── jest.config.js        # Jest 配置

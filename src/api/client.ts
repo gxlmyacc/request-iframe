@@ -1,9 +1,9 @@
 import { ErrorResponse, RequestIframeClient, RequestIframeClientOptions } from '../types';
 import { getIframeTargetOrigin, generateInstanceId } from '../utils';
-import { RequestIframeClientServer } from '../core/client-server';
-import { RequestIframeClientImpl } from '../core/client';
+import { RequestIframeClientImpl } from '../impl/client';
 import { setupClientDebugInterceptors } from '../utils/debug';
-import { Messages, ErrorCode, OriginConstant } from '../constants';
+import { setRequestIframeLogLevel } from '../utils/logger';
+import { Messages, ErrorCode, OriginConstant, LogLevel } from '../constants';
 
 /**
  * Create a client (for sending requests)
@@ -45,17 +45,9 @@ export function requestIframeClient(
   
   // Generate instance ID first (will be used by both client and server)
   const instanceId = generateInstanceId();
-  
-  // Create ClientServer (internally obtains or creates a shared MessageChannel)
-  const server = new RequestIframeClientServer({
-    secretKey,
-    autoOpen: options?.autoOpen,
-    autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
-    autoAckMaxIdLength: options?.autoAckMaxIdLength
-  }, instanceId);
-  
-  // Create client instance
-  const client = new RequestIframeClientImpl(targetWindow, targetOrigin, server, {
+
+  // Create client instance (internally creates its core message server)
+  const client = new RequestIframeClientImpl(targetWindow, targetOrigin, {
     secretKey,
     ackTimeout: options?.ackTimeout,
     timeout: options?.timeout,
@@ -63,12 +55,23 @@ export function requestIframeClient(
     returnData: options?.returnData,
     headers: options?.headers,
     allowedOrigins: options?.allowedOrigins,
-    validateOrigin: options?.validateOrigin
+    validateOrigin: options?.validateOrigin,
+    autoOpen: options?.autoOpen,
+    autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
+    autoAckMaxIdLength: options?.autoAckMaxIdLength
   }, instanceId);
 
-  // If trace mode is enabled, register debug interceptors
+  /**
+   * Trace/log level:
+   * - default: only warn/error will be printed (logger default)
+   * - if trace enabled: raise log level and (optionally) enable detailed debug interceptors
+   */
   if (options?.trace) {
-    setupClientDebugInterceptors(client);
+    const level = options.trace === true ? LogLevel.TRACE : options.trace;
+    setRequestIframeLogLevel(level);
+    if (level === LogLevel.TRACE || level === LogLevel.INFO) {
+      setupClientDebugInterceptors(client);
+    }
   }
 
   return client;

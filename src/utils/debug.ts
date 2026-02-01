@@ -1,29 +1,16 @@
 import { RequestConfig, Response, ErrorResponse, ServerRequest, ServerResponse, PostMessageData } from '../types';
 import { RequestIframeClient, RequestIframeServer } from '../types';
-import { MessageType, getStatusText, Messages } from '../constants';
+import { MessageType, getStatusText, Messages, LogLevel, DebugEvent, DebugEventValue } from '../constants';
+import { ensureRequestIframeLogLevel, requestIframeLog } from './logger';
 
-/**
- * Debug log prefix
- */
-const DEBUG_PREFIX = '[request-iframe]';
+type DebugLogLevel = typeof LogLevel.INFO | typeof LogLevel.WARN | typeof LogLevel.ERROR;
 
-/**
- * Format log output
- * - Prefix: bold
- * - info: message text in blue
- */
-function log(level: 'info' | 'warn' | 'error', message: string, data?: unknown): void {
-  const timestamp = new Date().toISOString();
-  const prefix = `${DEBUG_PREFIX} [${timestamp}] [${level.toUpperCase()}]`;
-
-  const prefixStyle = 'font-weight:bold';
-  const messageStyle = level === 'info' ? 'color: #1976d2' : '';
-
-  if (data !== undefined) {
-    console[level](`%c${prefix}%c ${message}`, prefixStyle, messageStyle, data);
-  } else {
-    console[level](`%c${prefix}%c ${message}`, prefixStyle, messageStyle);
+function logEvent(level: DebugLogLevel, event: DebugEventValue, message: string, data?: unknown): void {
+  if (data !== undefined && data !== null && typeof data === 'object') {
+    requestIframeLog(level, message, { event, ...(data as any) });
+    return;
   }
+  requestIframeLog(level, message, data === undefined ? { event } : { event, data });
 }
 
 /**
@@ -57,9 +44,11 @@ function formatMessageData(data: any): any {
  * Register debug interceptors for client
  */
 export function setupClientDebugInterceptors(client: RequestIframeClient): void {
+  ensureRequestIframeLogLevel(LogLevel.INFO);
+
   // Request interceptor: log request start
   client.interceptors.request.use((config: RequestConfig) => {
-    log('info', Messages.DEBUG_CLIENT_REQUEST_START, formatMessageData({
+    logEvent(LogLevel.INFO, DebugEvent.CLIENT_REQUEST_START, Messages.DEBUG_CLIENT_REQUEST_START, formatMessageData({
       path: config.path,
       body: config.body,
       headers: config.headers,
@@ -94,22 +83,22 @@ export function setupClientDebugInterceptors(client: RequestIframeClient): void 
           mimeType,
           contentLength
         };
-        log('info', Messages.DEBUG_CLIENT_REQUEST_SUCCESS_FILE, formatMessageData(logData));
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_REQUEST_SUCCESS_FILE, Messages.DEBUG_CLIENT_REQUEST_SUCCESS_FILE, formatMessageData(logData));
       } else if (response.stream) {
         logData.stream = {
           streamId: (response.stream as any).streamId,
           type: (response.stream as any).type
         };
-        log('info', Messages.DEBUG_CLIENT_REQUEST_SUCCESS_STREAM, formatMessageData(logData));
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_REQUEST_SUCCESS_STREAM, Messages.DEBUG_CLIENT_REQUEST_SUCCESS_STREAM, formatMessageData(logData));
       } else {
         logData.data = response.data;
-        log('info', Messages.DEBUG_CLIENT_REQUEST_SUCCESS, formatMessageData(logData));
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_REQUEST_SUCCESS, Messages.DEBUG_CLIENT_REQUEST_SUCCESS, formatMessageData(logData));
       }
       
       return response;
     },
     (error: ErrorResponse) => {
-      log('error', Messages.DEBUG_CLIENT_REQUEST_FAILED, formatMessageData({
+      logEvent(LogLevel.ERROR, DebugEvent.CLIENT_REQUEST_FAILED, Messages.DEBUG_CLIENT_REQUEST_FAILED, formatMessageData({
         requestId: error.requestId,
         code: error.code,
         message: error.message,
@@ -120,119 +109,101 @@ export function setupClientDebugInterceptors(client: RequestIframeClient): void 
     }
   );
   
-  // Hook into client's internal message handling via server's message dispatcher
-  // This requires accessing internal properties, so we use type assertion
+  /** Attach hook-based message debugging (no monkey patch). */
   const clientImpl = client as any;
-  if (clientImpl.server && clientImpl.server.messageDispatcher) {
-    setupClientMessageDebugging(clientImpl);
-  }
+  setupClientMessageDebuggingViaHooks(clientImpl);
 }
 
 /**
- * Setup message-level debugging for client
+ * Setup message-level debugging for client (hook-based, no monkey patch).
  */
-function setupClientMessageDebugging(clientImpl: any): void {
-  const server = clientImpl.server;
-  
-  // Store original _registerPendingRequest
-  const originalRegister = server._registerPendingRequest?.bind(server);
-  if (originalRegister) {
-    server._registerPendingRequest = function(
-      requestId: string,
-      resolve: (data: PostMessageData) => void,
-      reject: () => void,
-      origin?: string
-    ) {
-      // Wrap resolve to log incoming messages
-      const wrappedResolve = (data: PostMessageData) => {
-        if (data.type === MessageType.ACK) {
-          log('info', Messages.DEBUG_CLIENT_RECEIVED_ACK, formatMessageData({
-            requestId: data.requestId,
-            path: data.path
-          }));
-        } else if (data.type === MessageType.ASYNC) {
-          log('info', Messages.DEBUG_CLIENT_RECEIVED_ASYNC, formatMessageData({
-            requestId: data.requestId,
-            path: data.path
-          }));
-        } else if (data.type === MessageType.STREAM_START) {
-          const streamBody = data.body as any;
-          log('info', Messages.DEBUG_CLIENT_RECEIVED_STREAM_START, formatMessageData({
-            requestId: data.requestId,
-            streamId: streamBody?.streamId,
-            streamType: streamBody?.type,
-            chunked: streamBody?.chunked,
-            autoResolve: streamBody?.autoResolve,
-            metadata: streamBody?.metadata
-          }));
-        } else if (data.type === MessageType.STREAM_DATA) {
-          const streamBody = data.body as any;
-          log('info', Messages.DEBUG_CLIENT_RECEIVED_STREAM_DATA, formatMessageData({
-            requestId: data.requestId,
-            streamId: streamBody?.streamId,
-            done: streamBody?.done,
-            dataLength: streamBody?.data?.length || 0
-          }));
-        } else if (data.type === MessageType.STREAM_END) {
-          const streamBody = data.body as any;
-          log('info', Messages.DEBUG_CLIENT_RECEIVED_STREAM_END, formatMessageData({
-            requestId: data.requestId,
-            streamId: streamBody?.streamId
-          }));
-        } else if (data.type === MessageType.RESPONSE) {
-          log('info', Messages.DEBUG_CLIENT_RECEIVED_RESPONSE, formatMessageData({
-            requestId: data.requestId,
-            status: data.status,
-            statusText: data.statusText,
-            requireAck: data.requireAck
-          }));
-        } else if (data.type === MessageType.ERROR) {
-          log('error', Messages.DEBUG_CLIENT_RECEIVED_ERROR, formatMessageData({
-            requestId: data.requestId,
-            status: data.status,
-            statusText: data.statusText,
-            error: data.error
-          }));
-        }
-        
-        resolve(data);
-      };
-      
-      // Wrap reject to log timeouts
-      const wrappedReject = () => {
-        log('warn', Messages.DEBUG_CLIENT_REQUEST_TIMEOUT, { requestId, origin });
-        reject();
-      };
-      
-      return originalRegister(requestId, wrappedResolve, wrappedReject, origin);
-    };
-  }
-  
-  // Log when messages are sent
-  const originalSendMessage = server.messageDispatcher?.sendMessage?.bind(server.messageDispatcher);
-  if (originalSendMessage) {
-    server.messageDispatcher.sendMessage = function(
-      target: Window,
-      targetOrigin: string,
-      type: string,
-      requestId: string,
-      data?: any
-    ) {
+function setupClientMessageDebuggingViaHooks(clientImpl: any): void {
+  const inbox = clientImpl.inbox;
+  const outbox = clientImpl.outbox;
+  const dispatcher = clientImpl.hub?.messageDispatcher || clientImpl.getHub?.()?.messageDispatcher;
+
+  /** Outbound */
+  if (outbox?.hooks?.afterSendMessage?.tap) {
+    outbox.hooks.afterSendMessage.tap('debug', (type: string, requestId: string, data: any) => {
       if (type === MessageType.REQUEST) {
-        log('info', Messages.DEBUG_CLIENT_SENDING_REQUEST, formatMessageData({
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_OUTBOUND, Messages.DEBUG_CLIENT_SENDING_REQUEST, formatMessageData({
           requestId,
           path: data?.path,
           body: data?.body,
           headers: data?.headers
         }));
       } else if (type === MessageType.PING) {
-        log('info', Messages.DEBUG_CLIENT_SENDING_PING, { requestId });
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_OUTBOUND, Messages.DEBUG_CLIENT_SENDING_PING, { requestId });
       } else if (type === MessageType.ACK) {
-        log('info', Messages.DEBUG_CLIENT_SENDING_RECEIVED_ACK, { requestId });
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_OUTBOUND, Messages.DEBUG_CLIENT_SENDING_RECEIVED_ACK, { requestId });
       }
-      
-      return originalSendMessage(target, targetOrigin, type, requestId, data);
-    };
+    });
+  } else if (dispatcher?.hooks?.afterSend?.tap) {
+    dispatcher.hooks.afterSend.tap('debug', (_target: any, _origin: string, message: PostMessageData) => {
+      if (message.type === MessageType.REQUEST) {
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_OUTBOUND, Messages.DEBUG_CLIENT_SENDING_REQUEST, formatMessageData({
+          requestId: message.requestId,
+          path: message.path,
+          body: message.body,
+          headers: message.headers
+        }));
+      }
+    });
+  }
+
+  /** Inbound */
+  if (inbox?.hooks?.inbound?.tap) {
+    inbox.hooks.inbound.tap('debug', (data: PostMessageData) => {
+      if (data.type === MessageType.ACK) {
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_ACK, formatMessageData({ requestId: data.requestId, path: data.path }));
+      } else if (data.type === MessageType.ASYNC) {
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_ASYNC, formatMessageData({ requestId: data.requestId, path: data.path }));
+      } else if (data.type === MessageType.STREAM_START) {
+        const streamBody = data.body as any;
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_STREAM_START, formatMessageData({
+          requestId: data.requestId,
+          streamId: streamBody?.streamId,
+          streamType: streamBody?.type,
+          chunked: streamBody?.chunked,
+          autoResolve: streamBody?.autoResolve,
+          metadata: streamBody?.metadata
+        }));
+      } else if (data.type === MessageType.STREAM_DATA) {
+        const streamBody = data.body as any;
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_STREAM_DATA, formatMessageData({
+          requestId: data.requestId,
+          streamId: streamBody?.streamId,
+          done: streamBody?.done,
+          dataLength: streamBody?.data?.length || 0
+        }));
+      } else if (data.type === MessageType.STREAM_END) {
+        const streamBody = data.body as any;
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_STREAM_END, formatMessageData({
+          requestId: data.requestId,
+          streamId: streamBody?.streamId
+        }));
+      } else if (data.type === MessageType.RESPONSE) {
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_RESPONSE, formatMessageData({
+          requestId: data.requestId,
+          status: data.status,
+          statusText: data.statusText,
+          requireAck: data.requireAck
+        }));
+      } else if (data.type === MessageType.ERROR) {
+        logEvent(LogLevel.ERROR, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_ERROR, formatMessageData({
+          requestId: data.requestId,
+          status: data.status,
+          statusText: data.statusText,
+          error: data.error
+        }));
+      }
+    });
+  } else if (dispatcher?.hooks?.inbound?.tap) {
+    dispatcher.hooks.inbound.tap('debug', (data: PostMessageData) => {
+      if (data.type === MessageType.ACK) {
+        logEvent(LogLevel.INFO, DebugEvent.CLIENT_MESSAGE_INBOUND, Messages.DEBUG_CLIENT_RECEIVED_ACK, formatMessageData({ requestId: data.requestId, path: data.path }));
+      }
+    });
   }
 }
 
@@ -241,6 +212,8 @@ function setupClientMessageDebugging(clientImpl: any): void {
  * Use middleware to log requests and responses
  */
 export function setupServerDebugListeners(server: RequestIframeServer): void {
+  ensureRequestIframeLogLevel(LogLevel.INFO);
+
   const serverImpl = server as any;
   const startTimes = new Map<string, number>();
   
@@ -249,7 +222,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
     const startTime = Date.now();
     startTimes.set(req.requestId, startTime);
     
-    log('info', Messages.DEBUG_SERVER_RECEIVED_REQUEST, formatMessageData({
+    logEvent(LogLevel.INFO, DebugEvent.SERVER_REQUEST_RECEIVED, Messages.DEBUG_SERVER_RECEIVED_REQUEST, formatMessageData({
       requestId: req.requestId,
       path: req.path,
       body: req.body,
@@ -269,7 +242,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
 
     // Track status code changes
     res.status = function(code: number): ServerResponse {
-      log('info', Messages.DEBUG_SERVER_SETTING_STATUS_CODE, {
+      logEvent(LogLevel.INFO, DebugEvent.SERVER_RESPONSE_SEND, Messages.DEBUG_SERVER_SETTING_STATUS_CODE, {
         requestId: req.requestId,
         path: req.path,
         statusCode: code
@@ -279,7 +252,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
 
     // Track header changes
     res.setHeader = function(name: string, value: string | number | string[]): void {
-      log('info', Messages.DEBUG_SERVER_SETTING_HEADER, {
+      logEvent(LogLevel.INFO, DebugEvent.SERVER_RESPONSE_SEND, Messages.DEBUG_SERVER_SETTING_HEADER, {
         requestId: req.requestId,
         path: req.path,
         header: name,
@@ -293,7 +266,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
       const duration = Date.now() - (startTimes.get(req.requestId) || startTime);
       startTimes.delete(req.requestId);
       
-      log('info', Messages.DEBUG_SERVER_SENDING_RESPONSE, formatMessageData({
+      logEvent(LogLevel.INFO, DebugEvent.SERVER_RESPONSE_SEND, Messages.DEBUG_SERVER_SENDING_RESPONSE, formatMessageData({
         requestId: req.requestId,
         path: req.path,
         status: res.statusCode,
@@ -311,7 +284,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
       const duration = Date.now() - (startTimes.get(req.requestId) || startTime);
       startTimes.delete(req.requestId);
       
-      log('info', Messages.DEBUG_SERVER_SENDING_JSON_RESPONSE, formatMessageData({
+      logEvent(LogLevel.INFO, DebugEvent.SERVER_RESPONSE_SEND, Messages.DEBUG_SERVER_SENDING_JSON_RESPONSE, formatMessageData({
         requestId: req.requestId,
         path: req.path,
         status: res.statusCode,
@@ -329,7 +302,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
       const duration = Date.now() - (startTimes.get(req.requestId) || startTime);
       startTimes.delete(req.requestId);
       
-      log('info', Messages.DEBUG_SERVER_SENDING_FILE, formatMessageData({
+      logEvent(LogLevel.INFO, DebugEvent.SERVER_RESPONSE_SEND, Messages.DEBUG_SERVER_SENDING_FILE, formatMessageData({
         requestId: req.requestId,
         path: req.path,
         status: res.statusCode,
@@ -348,7 +321,7 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
         const duration = Date.now() - (startTimes.get(req.requestId) || startTime);
         startTimes.delete(req.requestId);
         
-        log('info', Messages.DEBUG_SERVER_SENDING_STREAM, formatMessageData({
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_RESPONSE_SEND, Messages.DEBUG_SERVER_SENDING_STREAM, formatMessageData({
           requestId: req.requestId,
           path: req.path,
           status: res.statusCode,
@@ -363,41 +336,31 @@ export function setupServerDebugListeners(server: RequestIframeServer): void {
     next();
   });
   
-  // Hook into server's message dispatcher for more detailed logging
-  if (serverImpl.messageDispatcher) {
-    setupServerMessageDebugging(serverImpl);
-  }
+  /** Hook into MessageDispatcher hooks (no monkey patch). */
+  setupServerMessageDebuggingViaHooks(serverImpl);
 }
 
 /**
- * Setup message-level debugging for server
+ * Setup message-level debugging for server (hook-based, no monkey patch).
  */
-function setupServerMessageDebugging(serverImpl: any): void {
-  const dispatcher = serverImpl.messageDispatcher;
-  
-  // Log when messages are sent
-  const originalSendMessage = dispatcher.sendMessage?.bind(dispatcher);
-  if (originalSendMessage) {
-    dispatcher.sendMessage = function(
-      target: Window,
-      targetOrigin: string,
-      type: string,
-      requestId: string,
-      data?: any
-    ) {
+function setupServerMessageDebuggingViaHooks(serverImpl: any): void {
+  const dispatcher = serverImpl.messageDispatcher || serverImpl.dispatcher;
+  if (!dispatcher?.hooks) return;
+
+  /** Outbound messages */
+  if (dispatcher.hooks.afterSend?.tap) {
+    dispatcher.hooks.afterSend.tap('debug', (_target: any, _targetOrigin: string, message: PostMessageData) => {
+      const type = message.type as string;
+      const requestId = message.requestId;
+      const data: any = message;
+
       if (type === MessageType.ACK) {
-        log('info', Messages.DEBUG_SERVER_SENDING_ACK, formatMessageData({
-          requestId,
-          path: data?.path
-        }));
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_ACK, formatMessageData({ requestId, path: (data as any).path }));
       } else if (type === MessageType.ASYNC) {
-        log('info', Messages.DEBUG_SERVER_SENDING_ASYNC, formatMessageData({
-          requestId,
-          path: data?.path
-        }));
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_ASYNC, formatMessageData({ requestId, path: (data as any).path }));
       } else if (type === MessageType.STREAM_START) {
-        const streamBody = data?.body || {};
-        log('info', Messages.DEBUG_SERVER_SENDING_STREAM_START, formatMessageData({
+        const streamBody = (data as any)?.body || {};
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_STREAM_START, formatMessageData({
           requestId,
           streamId: streamBody.streamId,
           streamType: streamBody.type,
@@ -406,75 +369,51 @@ function setupServerMessageDebugging(serverImpl: any): void {
           metadata: streamBody.metadata
         }));
       } else if (type === MessageType.STREAM_DATA) {
-        const streamBody = data?.body || {};
-        log('info', Messages.DEBUG_SERVER_SENDING_STREAM_DATA, formatMessageData({
+        const streamBody = (data as any)?.body || {};
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_STREAM_DATA, formatMessageData({
           requestId,
           streamId: streamBody.streamId,
           done: streamBody.done,
           dataLength: streamBody.data?.length || 0
         }));
       } else if (type === MessageType.STREAM_END) {
-        const streamBody = data?.body || {};
-        log('info', Messages.DEBUG_SERVER_SENDING_STREAM_END, formatMessageData({
+        const streamBody = (data as any)?.body || {};
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_STREAM_END, formatMessageData({
           requestId,
           streamId: streamBody.streamId
         }));
       } else if (type === MessageType.ERROR) {
-        log('error', Messages.DEBUG_SERVER_SENDING_ERROR, formatMessageData({
+        logEvent(LogLevel.ERROR, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_ERROR, formatMessageData({
           requestId,
-          status: data?.status,
-          statusText: data?.statusText,
-          error: data?.error,
-          path: data?.path
+          status: (data as any)?.status,
+          statusText: (data as any)?.statusText,
+          error: (data as any)?.error,
+          path: (data as any)?.path
         }));
       } else if (type === MessageType.RESPONSE) {
-        log('info', Messages.DEBUG_SERVER_SENDING_RESPONSE_VIA_DISPATCHER, formatMessageData({
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_OUTBOUND, Messages.DEBUG_SERVER_SENDING_RESPONSE_VIA_DISPATCHER, formatMessageData({
           requestId,
-          status: data?.status,
-          statusText: data?.statusText,
-          requireAck: data?.requireAck,
-          path: data?.path
+          status: (data as any)?.status,
+          statusText: (data as any)?.statusText,
+          requireAck: (data as any)?.requireAck,
+          path: (data as any)?.path
         }));
       }
-      
-      return originalSendMessage(target, targetOrigin, type, requestId, data);
-    };
+    });
   }
-  
-  // Log when requests are received (before handler)
-  const originalHandleRequest = serverImpl.handleRequest?.bind(serverImpl);
-  if (originalHandleRequest) {
-    serverImpl.handleRequest = function(data: PostMessageData, context: any) {
-      log('info', Messages.DEBUG_SERVER_HANDLING_REQUEST, formatMessageData({
-        requestId: data.requestId,
-        path: data.path,
-        origin: context?.origin,
-        role: data.role,
-        creatorId: data.creatorId
-      }));
-      return originalHandleRequest(data, context);
-    };
-  }
-  
-  // Log handler execution
-  const originalRunMiddlewares = serverImpl.runMiddlewares?.bind(serverImpl);
-  if (originalRunMiddlewares) {
-    serverImpl.runMiddlewares = function(req: ServerRequest, res: ServerResponse, callback: () => void) {
-      const handlerStartTime = Date.now();
-      log('info', Messages.DEBUG_SERVER_EXECUTING_MIDDLEWARE_CHAIN, {
-        requestId: req.requestId,
-        path: req.path
-      });
-      
-      return originalRunMiddlewares(req, res, () => {
-        const handlerDuration = Date.now() - handlerStartTime;
-        log('info', Messages.DEBUG_SERVER_MIDDLEWARE_CHAIN_COMPLETED, {
-          requestId: req.requestId,
-          path: req.path,
-          duration: `${handlerDuration}ms`
-        });
-        callback();
-      });
-    };
+
+  /** Inbound messages */
+  if (dispatcher.hooks.inbound?.tap) {
+    dispatcher.hooks.inbound.tap('debug', (data: PostMessageData, context: any) => {
+      if (data.type === MessageType.REQUEST) {
+        logEvent(LogLevel.INFO, DebugEvent.SERVER_MESSAGE_INBOUND, Messages.DEBUG_SERVER_HANDLING_REQUEST, formatMessageData({
+          requestId: data.requestId,
+          path: data.path,
+          origin: context?.origin,
+          role: data.role,
+          creatorId: data.creatorId
+        }));
+      }
+    });
   }
 }

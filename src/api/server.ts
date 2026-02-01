@@ -1,7 +1,9 @@
 import { RequestIframeServer, RequestIframeServerOptions } from '../types';
-import { RequestIframeServerImpl } from '../core/server';
+import { RequestIframeServerImpl } from '../impl/server';
 import { setupServerDebugListeners } from '../utils/debug';
+import { setRequestIframeLogLevel } from '../utils/logger';
 import { getCachedServer, cacheServer, clearServerCache } from '../utils/cache';
+import { LogLevel } from '../constants';
 
 /**
  * Create a server (for receiving and handling requests)
@@ -40,9 +42,17 @@ export function requestIframeServer(
     autoAckMaxIdLength: options?.autoAckMaxIdLength
   });
 
-  // If trace mode is enabled, register debug listeners
+  /**
+   * Trace/log level:
+   * - default: only warn/error will be printed (logger default)
+   * - if trace enabled: raise log level and (optionally) enable detailed debug listeners
+   */
   if (options?.trace) {
-    setupServerDebugListeners(server);
+    const level = options.trace === true ? LogLevel.TRACE : options.trace;
+    setRequestIframeLogLevel(level);
+    if (level === LogLevel.TRACE || level === LogLevel.INFO) {
+      setupServerDebugListeners(server);
+    }
   }
 
   // Cache server if id is specified

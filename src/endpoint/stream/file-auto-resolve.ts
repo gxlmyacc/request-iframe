@@ -1,0 +1,33 @@
+import type { StreamStartInfo } from './factory';
+import { HttpHeader } from '../../constants';
+import type { IframeFileReadableStream } from '../../stream';
+
+/**
+ * Parse filename from Content-Disposition header.
+ */
+export function parseFilenameFromContentDisposition(value?: string | string[]): string | undefined {
+  if (!value) return undefined;
+  const disposition = typeof value === 'string' ? value : value[0];
+  if (!disposition) return undefined;
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  return match ? match[1] : undefined;
+}
+
+/**
+ * Auto resolve a file readable stream to File/Blob.
+ *
+ * Filename priority:
+ * - Content-Disposition filename (if provided)
+ * - stream_start metadata filename (if provided)
+ * - stream.filename (if provided)
+ */
+export function autoResolveIframeFileReadableStream(params: {
+  fileStream: IframeFileReadableStream;
+  info?: StreamStartInfo | null;
+  headers?: Record<string, string | string[]>;
+}): Promise<File | Blob> {
+  const headerFilename = parseFilenameFromContentDisposition(params.headers?.[HttpHeader.CONTENT_DISPOSITION]);
+  const fileName = headerFilename || params.info?.metadata?.filename || params.fileStream.filename;
+  return fileName ? params.fileStream.readAsFile(fileName) : params.fileStream.readAsBlob();
+}
+

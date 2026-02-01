@@ -36,6 +36,7 @@ const defaultMessages = {
   MIDDLEWARE_ERROR: 'Middleware error',
   ERROR: 'Error',
   TOO_MANY_REQUESTS: 'Too many concurrent requests (limit: {0})',
+  HUB_REGISTER_HANDLERS_NOT_SET: 'RequestIframeEndpointHub: registerHandlers is not set',
 
   /** Client errors */
   IFRAME_NOT_READY: 'iframe.contentWindow is not available',
@@ -44,6 +45,10 @@ const defaultMessages = {
   /** ClientServer warnings */
   CLIENT_SERVER_IGNORED_MESSAGE_WHEN_CLOSED:
     'Ignored message because client server is closed/destroyed (type: {0}, requestId: {1})',
+
+  /** Server warnings */
+  SERVER_IGNORED_MESSAGE_WHEN_CLOSED:
+    'Ignored message because server is closed/destroyed (type: {0}, requestId: {1})',
 
   /** Stream related messages */
   STREAM_NOT_BOUND: 'Stream is not bound to a request context',
