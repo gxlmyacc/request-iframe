@@ -67,9 +67,9 @@ export function requestIframeServer(
  * Clear server cache (for testing or reset)
  * Note: This clears the cached server instances
  */
-export function clearRequestIframeServerCache(secretKey?: string): void {
-  // Clear server cache
-  clearServerCache();
-  // MessageChannel cleanup is handled by clearMessageChannelCache in cache.ts
-  void secretKey;
+export function clearRequestIframeServerCache(
+  arg?: string | { secretKey?: string; id?: string }
+): void {
+  /** Clear server cache */
+  clearServerCache(arg);
 }

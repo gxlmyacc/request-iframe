@@ -1,6 +1,6 @@
 {
   "name": "request-iframe",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Communicate with iframes like sending HTTP requests",
   "main": "library/index.js",
   "module": "esm/index.js",
@@ -10,6 +10,46 @@
       "types": "./library/index.d.ts",
       "import": "./esm/index.js",
       "require": "./library/index.js"
+    },
+    "./constants": {
+      "types": "./library/constants/index.d.ts",
+      "import": "./esm/constants/index.js",
+      "require": "./library/constants/index.js"
+    },
+    "./types": {
+      "types": "./library/types/index.d.ts",
+      "import": "./esm/types/index.js",
+      "require": "./library/types/index.js"
+    },
+    "./message": {
+      "types": "./library/message/index.d.ts",
+      "import": "./esm/message/index.js",
+      "require": "./library/message/index.js"
+    },
+    "./message/ack": {
+      "types": "./library/message/ack.d.ts",
+      "import": "./esm/message/ack.js",
+      "require": "./library/message/ack.js"
+    },
+    "./message/channel-cache": {
+      "types": "./library/message/channel-cache.d.ts",
+      "import": "./esm/message/channel-cache.js",
+      "require": "./library/message/channel-cache.js"
+    },
+    "./stream": {
+      "types": "./library/stream/index.d.ts",
+      "import": "./esm/stream/index.js",
+      "require": "./library/stream/index.js"
+    },
+    "./endpoint": {
+      "types": "./library/endpoint/index.d.ts",
+      "import": "./esm/endpoint/index.js",
+      "require": "./library/endpoint/index.js"
+    },
+    "./interceptors": {
+      "types": "./library/interceptors/index.d.ts",
+      "import": "./esm/interceptors/index.js",
+      "require": "./library/interceptors/index.js"
     },
     "./react": {
       "types": "./react/library/index.d.ts",

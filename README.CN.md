@@ -906,7 +906,7 @@ interface WritableStreamOptions {
 
 **pull/ack 协议（新增，默认启用）：**
 - 读侧会自动发送 `stream_pull` 请求更多 chunk；写侧只会在收到 `stream_pull` 后才继续发送 `stream_data`，实现真正的背压（按需拉取）。
-  - 断连检测不依赖 `stream_ack`，而是通过 `streamTimeout + 心跳(isConnect)` 来实现。
+  - 断连检测不依赖“逐帧确认专用消息类型”，而是通过 `streamTimeout + 心跳(isConnect)` 来实现。
 
 **consume 默认行为（变更）：**
 - `for await (const chunk of stream)` 默认会 **消费并丢弃已迭代过的 chunk**（`consume: true`），避免长流场景内存无限增长。

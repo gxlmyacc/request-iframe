@@ -6,6 +6,7 @@ import type { RequestIframeEndpointHub } from './hub';
 import { createPingResponder } from '../heartbeat/ping';
 import { SyncHook } from '../../utils/hooks';
 import { requestIframeLog } from '../../utils/logger';
+import type { RequestIframeEndpointOutbox } from './outbox';
 
 /**
  * Pending request awaiting response
@@ -15,6 +16,14 @@ interface PendingRequest {
   reject: (error: Error) => void;
   origin?: string;
   originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
+}
+
+interface PendingIsConnect {
+  resolve: (ok: boolean) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
+  targetOrigin: string;
+  originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
+  onPeerId?: (peerId?: string) => void;
 }
 
 /**
@@ -28,6 +37,7 @@ interface PendingRequest {
  */
 export class RequestIframeEndpointInbox {
   public static readonly PENDING_REQUESTS = 'inbox:pendingRequests';
+  public static readonly PENDING_IS_CONNECT = 'inbox:pendingIsConnect';
 
   public readonly hooks = {
     inbound: new SyncHook<[data: PostMessageData, context: MessageContext]>(),
@@ -61,6 +71,39 @@ export class RequestIframeEndpointInbox {
     this.hub.registerHandler(MessageType.PONG, this.handlePong.bind(this), handlerOptions);
     this.hub.registerHandler(MessageType.PING, this.handlePing.bind(this), handlerOptions);
     this.hub.registerHandler(MessageType.STREAM_START, boundHandleClientResponse, handlerOptions);
+  }
+
+  /**
+   * Client-side "isConnect" ping helper.
+   *
+   * - Sends PING(requireAck=true)
+   * - Resolves true when ACK or PONG arrives, false on timeout
+   */
+  public pingIsConnect(params: {
+    peer: RequestIframeEndpointOutbox;
+    timeoutMs: number;
+    targetOrigin: string;
+    targetId?: string;
+    onPeerId?: (peerId?: string) => void;
+    originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
+  }): Promise<boolean> {
+    const requestId = `ping_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const timeoutId = this.hub.pending.setTimeout(() => {
+        this.hub.pending.delete(RequestIframeEndpointInbox.PENDING_IS_CONNECT, requestId);
+        resolve(false);
+      }, params.timeoutMs);
+
+      this.hub.pending.set(RequestIframeEndpointInbox.PENDING_IS_CONNECT, requestId, {
+        resolve,
+        timeoutId,
+        targetOrigin: params.targetOrigin,
+        originValidator: params.originValidator,
+        onPeerId: params.onPeerId
+      } satisfies PendingIsConnect);
+
+      params.peer.sendMessage(MessageType.PING, requestId, { requireAck: true, targetId: params.targetId });
+    });
   }
 
   /**
@@ -114,6 +157,33 @@ export class RequestIframeEndpointInbox {
    */
   private handleClientResponse(data: PostMessageData, context: MessageContext): void {
     this.hooks.inbound.call(data, context);
+
+    /**
+     * isConnect waiter:
+     * - ACK is sent by the peer when it accepted the PING (auto-ack workflow)
+     * - We treat either ACK or PONG as a successful connectivity signal
+     */
+    if (data.type === MessageType.ACK) {
+      const pendingIsConnect = this.hub.pending.get<string, PendingIsConnect>(
+        RequestIframeEndpointInbox.PENDING_IS_CONNECT,
+        data.requestId
+      );
+      if (pendingIsConnect) {
+        // Must match the pending target origin (and originValidator if configured)
+        if (!this.hub.isOriginAllowedBy(context.origin, data, context, pendingIsConnect.targetOrigin, pendingIsConnect.originValidator)) {
+          // Mark handled (and auto-ack if requireAck) but ignore the signal
+          context.markAcceptedBy(this.hub.instanceId ?? MessageRole.CLIENT);
+          return;
+        }
+        context.markAcceptedBy(this.hub.instanceId ?? MessageRole.CLIENT);
+        this.hub.pending.clearTimeout(pendingIsConnect.timeoutId);
+        this.hub.pending.delete(RequestIframeEndpointInbox.PENDING_IS_CONNECT, data.requestId);
+        pendingIsConnect.onPeerId?.(data.creatorId);
+        pendingIsConnect.resolve(true);
+        return;
+      }
+    }
+
     const pending = this.hub.pending.get<string, PendingRequest>(RequestIframeEndpointInbox.PENDING_REQUESTS, data.requestId);
     if (!pending) {
       /**
@@ -141,10 +211,7 @@ export class RequestIframeEndpointInbox {
      * - other client instances sharing the same channel won't also process it
      * - MessageDispatcher can run its generalized requireAck auto-ack logic
      */
-    if (!context.handledBy) {
-      context.accepted = true;
-      context.handledBy = this.hub.instanceId ?? MessageRole.CLIENT;
-    }
+    context.markAcceptedBy(this.hub.instanceId ?? MessageRole.CLIENT);
 
     /** ack, async, and stream_start don't delete pending (stream_start needs to keep pending for stream_data/stream_end) */
     if (data.type === MessageType.ACK || data.type === MessageType.ASYNC || data.type === MessageType.STREAM_START) {
@@ -166,6 +233,24 @@ export class RequestIframeEndpointInbox {
    */
   private handlePong(data: PostMessageData, context: MessageContext): void {
     this.hooks.inbound.call(data, context);
+
+    const pendingIsConnect = this.hub.pending.get<string, PendingIsConnect>(
+      RequestIframeEndpointInbox.PENDING_IS_CONNECT,
+      data.requestId
+    );
+    if (pendingIsConnect) {
+      if (!this.hub.isOriginAllowedBy(context.origin, data, context, pendingIsConnect.targetOrigin, pendingIsConnect.originValidator)) {
+        context.markAcceptedBy(this.hub.instanceId ?? MessageRole.CLIENT);
+        return;
+      }
+      context.markAcceptedBy(this.hub.instanceId ?? MessageRole.CLIENT);
+      this.hub.pending.clearTimeout(pendingIsConnect.timeoutId);
+      this.hub.pending.delete(RequestIframeEndpointInbox.PENDING_IS_CONNECT, data.requestId);
+      pendingIsConnect.onPeerId?.(data.creatorId);
+      pendingIsConnect.resolve(true);
+      return;
+    }
+
     const pending = this.hub.pending.get<string, PendingRequest>(RequestIframeEndpointInbox.PENDING_REQUESTS, data.requestId);
     if (!pending) return;
 
@@ -173,10 +258,7 @@ export class RequestIframeEndpointInbox {
       return;
     }
 
-    if (!context.handledBy) {
-      context.accepted = true;
-      context.handledBy = this.hub.instanceId ?? MessageRole.CLIENT;
-    }
+    context.markAcceptedBy(this.hub.instanceId ?? MessageRole.CLIENT);
 
     this.hub.pending.delete(RequestIframeEndpointInbox.PENDING_REQUESTS, data.requestId);
     this.hooks.pendingResolved.call(data.requestId, data);

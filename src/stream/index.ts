@@ -7,6 +7,10 @@ export * from './types';
 export { IframeWritableStream } from './writable-stream';
 export { IframeFileWritableStream } from './file-stream';
 
+// Stream error
+export { RequestIframeStreamError } from './error';
+export type { RequestIframeStreamErrorCode, RequestIframeStreamErrorParams } from './error';
+
 // Readable stream (client-side)
 export { IframeReadableStream } from './readable-stream';
 export type { StreamMessageHandler } from './readable-stream';

@@ -5,7 +5,7 @@ import { RequestIframeEndpointFacade } from '../src/endpoint/facade';
 import { RequestIframeEndpointHub } from '../src/endpoint/infra/hub';
 import { RequestIframeEndpointHeartbeat } from '../src/endpoint/heartbeat/heartbeat';
 import { createPingResponder } from '../src/endpoint/heartbeat/ping';
-import { buildExpectedAck, isExpectedAckMatch } from '../src/endpoint/messages/ack';
+import { buildExpectedAck, isExpectedAckMatch } from '../src/message/ack';
 import { buildStreamStartTimeoutErrorPayload } from '../src/endpoint/stream/errors';
 import { parseStreamStart, createReadableStreamFromStart } from '../src/endpoint/stream/factory';
 import { autoResolveIframeFileReadableStream, parseFilenameFromContentDisposition } from '../src/endpoint/stream/file-auto-resolve';
@@ -189,13 +189,33 @@ describe('coverage: endpoint/heartbeat + ping responder', () => {
     };
 
     const responder = createPingResponder({ hub, handledBy: 'h1', includeTargetId: true });
-    const ctx1: any = { origin: OriginConstant.ANY, source: undefined, handledBy: undefined, accepted: false };
+    const attachCtx = (c: any) => {
+      c.markHandledBy = (handledBy: string) => {
+        if (!c.handledBy) c.handledBy = handledBy;
+      };
+      c.markAcceptedBy = (handledBy: string) => {
+        if (!c.acceptedBy) c.acceptedBy = handledBy;
+        c.markHandledBy(handledBy);
+      };
+      c.markDoneBy = (doneBy: string) => {
+        c.doneBy = doneBy;
+      };
+      c.getStage = () => {
+        if (c.doneBy) return 'done';
+        if (c.acceptedBy) return 'accepted';
+        if (c.handledBy) return 'handling';
+        return 'pending';
+      };
+      return c;
+    };
+
+    const ctx1: any = attachCtx({ origin: OriginConstant.ANY, source: undefined, handledBy: undefined, acceptedBy: undefined });
     responder(createPostMessage(MessageType.PING, 'p1') as any, ctx1);
     expect(hub.messageDispatcher.sendMessage).not.toHaveBeenCalled();
 
-    const ctx2: any = { origin: OriginConstant.ANY, source: window, handledBy: undefined, accepted: false };
+    const ctx2: any = attachCtx({ origin: OriginConstant.ANY, source: window, handledBy: undefined, acceptedBy: undefined });
     responder(createPostMessage(MessageType.PING, 'p2', { creatorId: 'c1' }) as any, ctx2);
-    expect(ctx2.accepted).toBe(true);
+    expect(ctx2.acceptedBy).toBe('h1');
     expect(ctx2.handledBy).toBe('h1');
     expect(hub.messageDispatcher.sendMessage).toHaveBeenCalled();
   });

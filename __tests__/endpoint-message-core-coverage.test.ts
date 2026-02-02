@@ -4,6 +4,32 @@ import { createPostMessage } from '../src/utils/protocol';
 
 describe('coverage: endpoint/infra/inbox', () => {
   it('should handle ping/pong + version error + response branches', () => {
+    const createCtx = (params: { origin: string; source?: any; acceptedBy?: string; handledBy?: any }) => {
+      const ctx: any = {
+        origin: params.origin,
+        source: params.source,
+        acceptedBy: params.acceptedBy,
+        handledBy: params.handledBy
+      };
+      ctx.markHandledBy = (handledBy: string) => {
+        if (!ctx.handledBy) ctx.handledBy = handledBy;
+      };
+      ctx.markAcceptedBy = (handledBy: string) => {
+        if (!ctx.acceptedBy) ctx.acceptedBy = handledBy;
+        ctx.markHandledBy(handledBy);
+      };
+      ctx.markDoneBy = (doneBy: string) => {
+        ctx.doneBy = doneBy;
+      };
+      ctx.getStage = () => {
+        if (ctx.doneBy) return 'done';
+        if (ctx.acceptedBy) return 'accepted';
+        if (ctx.handledBy) return 'handling';
+        return 'pending';
+      };
+      return ctx;
+    };
+
     const handlers: Record<string, { fn: any; options: any }> = {};
 
     const pendingMaps = new Map<string, Map<string, any>>();
@@ -54,12 +80,10 @@ describe('coverage: endpoint/infra/inbox', () => {
     expect(core.messageDispatcher.sendMessage).not.toHaveBeenCalled();
 
     /** ping: source exists -> reply pong */
-    handlers[MessageType.PING].fn(createPostMessage(MessageType.PING, 'p2', { role: MessageRole.SERVER }) as any, {
-      origin: '*',
-      source: window,
-      accepted: false,
-      handledBy: undefined
-    } as any);
+    handlers[MessageType.PING].fn(
+      createPostMessage(MessageType.PING, 'p2', { role: MessageRole.SERVER }) as any,
+      createCtx({ origin: '*', source: window, acceptedBy: undefined, handledBy: undefined })
+    );
     expect(core.messageDispatcher.sendMessage).toHaveBeenCalled();
 
     /** pending missing + closed -> warnOnce path */
@@ -74,34 +98,31 @@ describe('coverage: endpoint/infra/inbox', () => {
     const resolve = jest.fn();
     const reject = jest.fn();
     inbox.registerPendingRequest('r1', resolve, reject, 'https://allowed');
-    handlers[MessageType.RESPONSE].fn(createPostMessage(MessageType.RESPONSE, 'r1', { role: MessageRole.SERVER, data: 1 }) as any, {
-      origin: 'https://blocked',
-      accepted: false,
-      handledBy: undefined
-    } as any);
+    handlers[MessageType.RESPONSE].fn(
+      createPostMessage(MessageType.RESPONSE, 'r1', { role: MessageRole.SERVER, data: 1 }) as any,
+      createCtx({ origin: 'https://blocked', acceptedBy: undefined, handledBy: undefined })
+    );
     expect(resolve).not.toHaveBeenCalled();
 
     /** ack/async/stream_start should NOT delete pending */
-    handlers[MessageType.ACK].fn(createPostMessage(MessageType.ACK, 'r1', { role: MessageRole.SERVER }) as any, {
-      origin: 'https://allowed',
-      accepted: false,
-      handledBy: undefined
-    } as any);
+    handlers[MessageType.ACK].fn(
+      createPostMessage(MessageType.ACK, 'r1', { role: MessageRole.SERVER }) as any,
+      createCtx({ origin: 'https://allowed', acceptedBy: undefined, handledBy: undefined })
+    );
     expect(resolve).toHaveBeenCalled();
     expect(pending.get(RequestIframeEndpointInbox.PENDING_REQUESTS, 'r1')).toBeDefined();
 
     handlers[MessageType.STREAM_START].fn(
       createPostMessage(MessageType.STREAM_START, 'r1', { role: MessageRole.SERVER, body: { streamId: 's' } }) as any,
-      { origin: 'https://allowed', accepted: false, handledBy: undefined } as any
+      createCtx({ origin: 'https://allowed', acceptedBy: undefined, handledBy: undefined })
     );
     expect(pending.get(RequestIframeEndpointInbox.PENDING_REQUESTS, 'r1')).toBeDefined();
 
     /** pong should delete pending if matches */
-    handlers[MessageType.PONG].fn(createPostMessage(MessageType.PONG, 'r1', { role: MessageRole.SERVER }) as any, {
-      origin: 'https://allowed',
-      accepted: false,
-      handledBy: undefined
-    } as any);
+    handlers[MessageType.PONG].fn(
+      createPostMessage(MessageType.PONG, 'r1', { role: MessageRole.SERVER }) as any,
+      createCtx({ origin: 'https://allowed', acceptedBy: undefined, handledBy: undefined })
+    );
     expect(pending.get(RequestIframeEndpointInbox.PENDING_REQUESTS, 'r1')).toBeUndefined();
 
     /** version error should reject and delete pending */

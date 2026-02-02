@@ -1,5 +1,6 @@
 import { ServerResponse, CookieOptions, SendOptions, SendFileOptions } from '../types';
-import { createSetCookie, createClearCookie, detectContentType } from '../utils';
+import { createSetCookie, createClearCookie } from '../utils/cookie';
+import { detectContentType } from '../utils/content-type';
 import { MessageType, HttpStatus, HttpHeader, getStatusText, ErrorCode } from '../constants';
 import { IframeWritableStream, isIframeWritableStream } from '../stream';
 import { RequestIframeEndpointOutbox } from '../endpoint';

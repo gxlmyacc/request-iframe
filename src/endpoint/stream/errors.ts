@@ -2,6 +2,12 @@ import type { PostMessageData } from '../../types';
 import { ErrorCode, HttpStatus, HttpStatusText, Messages, formatMessage } from '../../constants';
 
 /**
+ * Endpoint Stream integration layer (`src/endpoint/stream`)
+ *
+ * This directory integrates postMessage `stream_*` messages with the stream object system in `src/stream`:
+ * - Endpoint-side composition / protocol glue (e.g. stream_start timeout error payload)
+ * - Does NOT implement the stream protocol itself (protocol lives in `src/stream`)
+ *
  * Build the ERROR payload for stream_start timeout.
  *
  * Used by server-side "request-body stream handshake" when the client fails to send stream_start in time.

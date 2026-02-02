@@ -1,5 +1,5 @@
-import { generateRequestId } from '../../utils';
-import { isAckMatch } from '../../utils/ack';
+import { generateRequestId } from '../utils/id';
+import { isAckMatch } from '../utils/ack';
 
 /**
  * Build the expected ack payload for requireAck workflows.

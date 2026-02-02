@@ -1,67 +1,10 @@
-import { OriginConstant } from '../constants';
+export { generateRequestId, generateInstanceId } from './id';
+export { getIframeTargetOrigin } from './iframe';
+export { isPromise } from './promise';
+export { isFunction } from './is';
 
-/**
- * Generate unique request ID
- */
-export function generateRequestId(): string {
-  return `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-}
-
-/**
- * Generate unique instance ID
- */
-export function generateInstanceId(): string {
-  return `inst_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-}
-
-/**
- * Derive targetOrigin from iframe.src
- */
-export function getIframeTargetOrigin(iframe: HTMLIFrameElement): string {
-  if (!iframe.src) {
-    return OriginConstant.ANY;
-  }
-  try {
-    return new URL(iframe.src).origin;
-  } catch (e) {
-    return OriginConstant.ANY;
-  }
-}
-
-
-export function isPromise<T>(value: any): value is Promise<T>  {
-  return value !== null && typeof value === 'object' && 'then' in value;
-}
-
-/**
- * Check if target window is still available (not closed/removed)
- * @param targetWindow Target window to check
- * @returns true if window is available, false otherwise
- */
-export function isWindowAvailable(targetWindow: Window | null | undefined): boolean {
-  if (!targetWindow) {
-    return false;
-  }
-
-  try {
-    // Must have postMessage to be a usable target
-    if (typeof (targetWindow as any).postMessage !== 'function') {
-      return false;
-    }
-
-    // For windows opened via window.open(), check closed property
-    if ('closed' in targetWindow && (targetWindow as any).closed === true) {
-      return false;
-    }
-
-    // Avoid touching cross-origin properties (like document) which may throw.
-    // If closed is not true and postMessage exists, treat as available.
-    return true;
-  } catch (e) {
-    // If accessing window properties throws an error, window is likely closed
-    return false;
-  }
-}
+export { isWindowAvailable } from './window';
+export { detectContentType } from './content-type';
 // Export protocol-related functions
 export {
   createPostMessage,
@@ -73,8 +16,10 @@ export {
   isCompatibleVersion
 } from './protocol';
 
-// Export cache-related functions
-export * from './cache';
+// NOTE:
+// Cache helpers are intentionally NOT re-exported here.
+// - Server cache is an internal API and should be imported from `./cache` explicitly.
+// - MessageChannel cache lives in `src/message/channel-cache.ts`.
 
 // Export path matching functions
 export * from './path-match';
@@ -90,95 +35,4 @@ export * from './cookie';
 // Export Error class
 export { RequestIframeError } from './error';
 
-/**
- * Detect Content-Type based on data type
- * @param data The data to detect Content-Type for
- * @param options Options for detection
- * @param options.checkStream Whether to check for IframeWritableStream (default: false)
- * @param options.isIframeWritableStream Optional function to check if data is a stream (required if checkStream is true)
- * @returns The detected Content-Type, or null if Content-Type should not be auto-set
- */
-export function detectContentType(
-  data: any,
-  options?: { checkStream?: boolean; isIframeWritableStream?: (value: any) => boolean }
-): string | null {
-  if (data === null || data === undefined) return null;
-
-  const { checkStream = false, isIframeWritableStream } = options || {};
-
-  // Stream - handled separately (only for response)
-  if (checkStream && isIframeWritableStream) {
-    if (isIframeWritableStream(data)) {
-      return null; // Stream will be handled by sendStream
-    }
-  }
-
-  // File
-  if (typeof File !== 'undefined' && data instanceof File) {
-    return data.type || 'application/octet-stream';
-  }
-
-  // Blob
-  if (typeof Blob !== 'undefined' && data instanceof Blob) {
-    return data.type || 'application/octet-stream';
-  }
-
-  // ArrayBuffer
-  if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) {
-    return 'application/octet-stream';
-  }
-
-  // FormData
-  if (typeof FormData !== 'undefined' && data instanceof FormData) {
-    // FormData typically doesn't need Content-Type header (browser sets it with boundary)
-    return null;
-  }
-
-  // URLSearchParams
-  if (typeof URLSearchParams !== 'undefined' && data instanceof URLSearchParams) {
-    return 'application/x-www-form-urlencoded';
-  }
-
-  // String - check if it's JSON string
-  if (typeof data === 'string') {
-    // Try to parse as JSON, if successful, treat as JSON
-    try {
-      JSON.parse(data);
-      return 'application/json';
-    } catch {
-      return 'text/plain; charset=utf-8';
-    }
-  }
-
-  // Number, boolean - treat as JSON
-  if (typeof data === 'number' || typeof data === 'boolean') {
-    return 'application/json';
-  }
-
-  // Plain object or array - treat as JSON
-  if (typeof data === 'object') {
-    // Exclude common binary/file types (already checked above, but double-check for safety)
-    if (typeof Blob !== 'undefined' && data instanceof Blob) return null;
-    if (typeof File !== 'undefined' && data instanceof File) return null;
-    if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) return null;
-    if (typeof FormData !== 'undefined' && data instanceof FormData) return null;
-    if (typeof URLSearchParams !== 'undefined' && data instanceof URLSearchParams) return null;
-    return 'application/json';
-  }
-
-  return null;
-}
-
-/** Convert Blob to base64 string */
-export function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = reader.result as string;
-      const base64 = result.includes(',') ? result.split(',')[1] : result;
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
+export { blobToBase64 } from './blob';

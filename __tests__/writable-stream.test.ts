@@ -168,7 +168,11 @@ describe('stream/writable-stream (IframeWritableStream) - branch focused', () =>
     expect(dataMsg).toBeDefined();
 
     // Simulate receiver auto-ack (MessageDispatcher would send this in real usage)
-    receivers.forEach((r) => r({ type: MessageType.ACK, requestId: dataMsg.requestId }, { origin: 'https://example.com' }));
+    const ackContext: any = { origin: 'https://example.com', handledBy: undefined };
+    ackContext.markHandledBy = (handledBy: string) => {
+      if (!ackContext.handledBy) ackContext.handledBy = handledBy;
+    };
+    receivers.forEach((r) => r({ type: MessageType.ACK, requestId: dataMsg.requestId }, ackContext));
 
     await expect(p).resolves.toBe(true);
   });

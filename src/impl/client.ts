@@ -11,14 +11,12 @@ import type {
   OriginMatcher,
   OriginValidator
 } from '../types';
-import { RequestIframeError } from '../utils';
+import { RequestIframeError } from '../utils/error';
 import { isExpectedAckMatch } from '../endpoint';
-import { detectContentType, isWindowAvailable } from '../utils';
-import {
-  generateRequestId,
-  generateInstanceId,
-  CookieStore
-} from '../utils';
+import { detectContentType } from '../utils/content-type';
+import { isWindowAvailable } from '../utils/window';
+import { generateRequestId, generateInstanceId } from '../utils/id';
+import { CookieStore } from '../utils/cookie';
 import {
   RequestInterceptorManager,
   ResponseInterceptorManager,
@@ -30,7 +28,7 @@ import {
   RequestIframeEndpointFacade,
   RequestIframeEndpointInbox,
   RequestIframeEndpointOutbox,
-  RequestIframeEndpointStreamRouter,
+  RequestIframeStreamDispatcher,
   createReadableStreamFromStart
 } from '../endpoint';
 import { autoResolveIframeFileReadableStream } from '../endpoint';
@@ -53,6 +51,7 @@ import {
   StreamMessageData
 } from '../stream';
 import type { MessageContext } from '../message';
+import { isFunction } from '../utils/is';
 
 /**
  * Client configuration options
@@ -109,7 +108,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    */
   private _cookieStore: CookieStore = new CookieStore();
 
-  private readonly streamRouter: RequestIframeEndpointStreamRouter;
+  private readonly streamDispatcher: RequestIframeStreamDispatcher;
 
   /** 
    * Target server ID (remembered from responses)
@@ -143,7 +142,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
       autoAckMaxIdLength: options?.autoAckMaxIdLength,
       inbox: {},
-      streamRouter: { handledBy: this.id },
+      streamDispatcher: { handledBy: this.id },
       originValidator: {
         allowedOrigins: options?.allowedOrigins,
         validateOrigin: options?.validateOrigin
@@ -153,7 +152,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this.endpoint = endpoint;
     /** Core/routers shared composition */
     this.hub = endpoint.hub;
-    this.streamRouter = endpoint.streamRouter;
+    this.streamDispatcher = endpoint.streamDispatcher;
     this.inbox = endpoint.inbox as RequestIframeEndpointInbox;
     this.originValidator = endpoint.originValidator;
 
@@ -165,10 +164,6 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
      * These hooks will run when client.open() is called.
      */
     this.endpoint.onOpen(() => this.inbox.registerHandlers());
-    this.endpoint.registerClientBaseHandlers({
-      handledBy: this.id,
-      isOriginAllowed: (d, ctx) => this.hub.isOriginAllowedBy(ctx.origin, d, ctx, this.targetOrigin, this.originValidator)
-    });
 
     // Provide fallback target for auto-ack (useful when MessageEvent.source is missing in tests)
     this.hub.setFallbackTarget(this.outbox.targetWindow, this.outbox.targetOrigin);
@@ -184,8 +179,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     // Save initial headers configuration
     this.initialHeaders = options?.headers;
 
-    // Stream routing is owned by facade (pluggable stream infra)
-    this.endpoint.enableStreamRouterCallback({
+    // Stream dispatching is owned by facade (pluggable stream infra)
+    this.endpoint.enableStreamDispatcherCallback({
       isOriginAllowed: (d, ctx) => this.hub.isOriginAllowedBy(ctx.origin, d, ctx, this.targetOrigin, this.originValidator)
     });
     this.endpoint.registerClientStreamCallbackHandlers({
@@ -204,14 +199,14 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    * Register stream message handler (StreamMessageHandler interface implementation)
    */
   public registerStreamHandler(streamId: string, handler: (data: StreamMessageData) => void): void {
-    this.streamRouter.register(streamId, handler);
+    this.streamDispatcher.register(streamId, handler);
   }
 
   /**
    * Unregister stream message handler (StreamMessageHandler interface implementation)
    */
   public unregisterStreamHandler(streamId: string): void {
-    this.streamRouter.unregister(streamId);
+    this.streamDispatcher.unregister(streamId);
   }
 
   /*
@@ -235,7 +230,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
    * Resolve header value (handle function type headers)
    */
   private resolveHeaderValue(value: HeaderValue, config: RequestConfig): string | string[] {
-    if (typeof value === 'function') {
+    if (isFunction<[RequestConfig], string | string[]>(value)) {
       return value(config);
     }
     return value;
@@ -818,7 +813,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
     this._cookieStore.clear();
     
     // Clear stream handlers
-    this.streamRouter.clear();
+    this.streamDispatcher.clear();
     
     // Clear interceptors
     this.interceptors.request.clear();

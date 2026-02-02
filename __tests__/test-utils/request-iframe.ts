@@ -1,6 +1,6 @@
 import { clearRequestIframeClientCache } from '../../src/api/client';
 import { clearRequestIframeServerCache } from '../../src/api/server';
-import { clearMessageChannelCache } from '../../src/utils/cache';
+import { clearMessageChannelCache } from '../../src/message/channel-cache';
 
 /**
  * Setup a clean test environment for request-iframe integration tests.

@@ -5,7 +5,9 @@ import type {
   RequestIframeClientOptions,
   RequestIframeServerOptions
 } from '../types';
-import { getIframeTargetOrigin, generateInstanceId, isWindowAvailable } from '../utils';
+import { getIframeTargetOrigin } from '../utils/iframe';
+import { generateInstanceId } from '../utils/id';
+import { isWindowAvailable } from '../utils/window';
 import { RequestIframeClientImpl } from '../impl/client';
 import { RequestIframeServerImpl } from '../impl/server';
 import { setupClientDebugInterceptors, setupServerDebugListeners } from '../utils/debug';

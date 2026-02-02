@@ -20,7 +20,7 @@ export {
   getOrCreateMessageChannel,
   releaseMessageChannel,
   clearMessageChannelCache,
-} from './utils/cache';
+} from './message/channel-cache';
 export { ServerRequestImpl } from './impl/request';
 export { ServerResponseImpl } from './impl/response';
 // Stream
@@ -49,6 +49,13 @@ export type {
   StreamMessageData
 } from './stream';
 // Types and utilities
+/**
+ * NOTE:
+ * Root entry re-exports are kept for convenience, but for better tree-shaking and clearer dependencies,
+ * prefer subpath imports:
+ * - `request-iframe/types`
+ * - `request-iframe/constants`
+ */
 export * from './types';
 export {
   detectContentType,

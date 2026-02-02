@@ -4,6 +4,14 @@ import { IframeReadableStream, IframeFileReadableStream } from '../../stream';
 import { StreamType as StreamTypeConstant } from '../../constants';
 
 /**
+ * Endpoint Stream integration layer (`src/endpoint/stream`)
+ *
+ * This directory integrates postMessage `stream_*` messages with the stream object system in `src/stream`:
+ * - Parses stream_start and creates the corresponding ReadableStream (data/file)
+ * - Does NOT implement the stream protocol itself (protocol lives in `src/stream`)
+ */
+
+/**
  * Parsed stream_start body info.
  */
 export interface StreamStartInfo {

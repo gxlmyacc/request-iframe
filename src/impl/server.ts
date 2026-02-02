@@ -11,7 +11,7 @@ import { matchPath, matchPathWithParams } from '../utils/path-match';
 import { ServerRequestImpl } from './request';
 import { ServerResponseImpl } from './response';
 import { MessageDispatcher, VersionValidator, MessageContext } from '../message';
-import { generateInstanceId } from '../utils';
+import { generateInstanceId } from '../utils/id';
 import {
   RequestIframeEndpointHub,
   RequestIframeEndpointFacade,
@@ -32,7 +32,8 @@ import {
   WarnOnceKey,
   buildWarnOnceKey
 } from '../constants';
-import { isPromise } from '../utils';
+import { isPromise } from '../utils/promise';
+import { isFunction } from '../utils/is';
 import { StreamMessageData } from '../stream';
 import { requestIframeLog } from '../utils/logger';
 
@@ -104,7 +105,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       versionValidator: options?.versionValidator,
       autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
       autoAckMaxIdLength: options?.autoAckMaxIdLength,
-      streamRouter: { handledBy: this.id },
+        streamDispatcher: { handledBy: this.id },
       heartbeat: {
         pendingBucket: RequestIframeServerImpl.PENDING_PONGS,
         handledBy: this.id,
@@ -351,7 +352,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       // No handler found in this instance
       // Mark as handled by this instance (using special marker) to prevent other instances from processing
       // This ensures only one instance sends the error response
-      context.handledBy = this.id;
+      context.markHandledBy(this.id);
       
       // Send METHOD_NOT_FOUND error
       // Use request's creatorId as targetId to route back to the correct client
@@ -382,7 +383,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     );
     if (!acquired) {
       // Prevent other server instances from also responding
-      context.handledBy = this.id;
+      context.markHandledBy(this.id);
       this.dispatcher.sendMessage(
         targetWindow,
         targetOrigin,
@@ -405,10 +406,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     }
 
     // Mark as accepted so MessageDispatcher can auto-send ACK (delivery confirmation)
-    context.accepted = true;
-
-    // Mark message as handled by this server instance to prevent other server instances from processing it
-    context.handledBy = this.id;
+    context.markAcceptedBy(this.id);
 
     // Create response object with channel reference
     // Pass request's creatorId as targetId so responses are routed back to the correct client
@@ -420,10 +418,10 @@ export class RequestIframeServerImpl implements RequestIframeServer {
       peer,
       {
         registerStreamHandler: (streamId: string, handler: (d: StreamMessageData) => void) => {
-          this.endpoint.streamRouter.register(streamId, handler);
+            this.endpoint.streamDispatcher.register(streamId, handler);
         },
         unregisterStreamHandler: (streamId: string) => {
-          this.endpoint.streamRouter.unregister(streamId);
+            this.endpoint.streamDispatcher.unregister(streamId);
         },
         heartbeat: () => this.endpoint.pingPeer(targetWindow, targetOrigin, this.ackTimeout, data.creatorId),
         onSent: () => this.hub.limiter.release(RequestIframeServerImpl.LIMIT_IN_FLIGHT_BY_CLIENT, clientKey)
@@ -585,7 +583,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
   public use(middleware: Middleware): void;
   public use(path: PathMatcher, middleware: Middleware): void;
   public use(pathOrMiddleware: PathMatcher | Middleware, middleware?: Middleware): void {
-    if (typeof pathOrMiddleware === 'function') {
+    if (isFunction(pathOrMiddleware)) {
       this.middlewares.push({
         matcher: null,
         middleware: pathOrMiddleware
@@ -681,7 +679,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     // Clean up handlers
     this.handlers.clear();
     this.middlewares.length = 0;
-    this.endpoint.streamRouter.clear();
+    this.endpoint.streamDispatcher.clear();
   }
 
   /**

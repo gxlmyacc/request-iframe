@@ -4,9 +4,10 @@ import {
   IIframeReadableStream,
   StreamMessageData
 } from './types';
-import { createPostMessage } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamInternalMessageType, formatMessage, StreamEvent } from '../constants';
+import { createPostMessage } from '../utils/protocol';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamInternalMessageType, formatMessage, StreamEvent, ErrorCode } from '../constants';
 import { IframeStreamCore } from './stream-core';
+import { RequestIframeStreamError } from './error';
 
 /**
  * Stream message handler interface
@@ -127,7 +128,12 @@ export class IframeReadableStream<T = any>
         this.handleEnd();
         break;
       case StreamInternalMessageType.ERROR:
-        this.handleError(new Error(data.error || Messages.STREAM_ERROR));
+        this.handleError(new RequestIframeStreamError({
+          message: data.error || Messages.STREAM_ERROR,
+          code: ErrorCode.STREAM_ERROR,
+          streamId: this.streamId,
+          requestId: this.requestId
+        }));
         break;
       case StreamInternalMessageType.CANCEL:
         this.handleCancel(data.reason);
@@ -250,7 +256,14 @@ export class IframeReadableStream<T = any>
     if (this.terminalError) {
       this.onErrorCallback?.(this.terminalError);
     } else {
-      this.onErrorCallback?.(new Error(Messages.STREAM_CANCELLED));
+      this.onErrorCallback?.(
+        new RequestIframeStreamError({
+          message: Messages.STREAM_CANCELLED,
+          code: ErrorCode.STREAM_CANCELLED,
+          streamId: this.streamId,
+          requestId: this.requestId
+        })
+      );
     }
     this.clearAllListeners();
   }
@@ -318,7 +331,12 @@ export class IframeReadableStream<T = any>
 
     // Connection likely dead: fail the stream
     this.emit(StreamEvent.TIMEOUT, { timeout: this.idleTimeout });
-    this.handleError(new Error(formatMessage(Messages.STREAM_TIMEOUT, this.idleTimeout)));
+    this.handleError(new RequestIframeStreamError({
+      message: formatMessage(Messages.STREAM_TIMEOUT, this.idleTimeout),
+      code: ErrorCode.STREAM_TIMEOUT,
+      streamId: this.streamId,
+      requestId: this.requestId
+    }));
   }
 
   /**
@@ -331,7 +349,12 @@ export class IframeReadableStream<T = any>
       return merged;
     }
     if (this._state === StreamStateConstant.ERROR || this._state === StreamStateConstant.CANCELLED) {
-      throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
+      throw this.terminalError || new RequestIframeStreamError({
+        message: Messages.STREAM_READ_ERROR,
+        code: ErrorCode.STREAM_READ_ERROR,
+        streamId: this.streamId,
+        requestId: this.requestId
+      });
     }
 
     while (this._state === StreamStateConstant.PENDING || this._state === StreamStateConstant.STREAMING) {
@@ -346,7 +369,12 @@ export class IframeReadableStream<T = any>
       this.emit(StreamEvent.READ, { value: merged });
       return merged;
     }
-    throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
+    throw this.terminalError || new RequestIframeStreamError({
+      message: Messages.STREAM_READ_ERROR,
+      code: ErrorCode.STREAM_READ_ERROR,
+      streamId: this.streamId,
+      requestId: this.requestId
+    });
   }
 
   /**
@@ -359,7 +387,12 @@ export class IframeReadableStream<T = any>
       return list;
     }
     if (this._state === StreamStateConstant.ERROR || this._state === StreamStateConstant.CANCELLED) {
-      throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
+      throw this.terminalError || new RequestIframeStreamError({
+        message: Messages.STREAM_READ_ERROR,
+        code: ErrorCode.STREAM_READ_ERROR,
+        streamId: this.streamId,
+        requestId: this.requestId
+      });
     }
 
     while (this._state === StreamStateConstant.PENDING || this._state === StreamStateConstant.STREAMING) {
@@ -372,7 +405,12 @@ export class IframeReadableStream<T = any>
       this.emit(StreamEvent.READ, { value: list });
       return list;
     }
-    throw this.terminalError || new Error(Messages.STREAM_READ_ERROR);
+    throw this.terminalError || new RequestIframeStreamError({
+      message: Messages.STREAM_READ_ERROR,
+      code: ErrorCode.STREAM_READ_ERROR,
+      streamId: this.streamId,
+      requestId: this.requestId
+    });
   }
 
   /**

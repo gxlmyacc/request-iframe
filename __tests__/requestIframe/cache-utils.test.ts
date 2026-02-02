@@ -39,7 +39,7 @@ describe('requestIframe - Cache utilities', () => {
     });
 
     it('should test clearMessageChannelCache', () => {
-      const { clearMessageChannelCache, getOrCreateMessageChannel } = require('../../src/utils/cache');
+      const { clearMessageChannelCache, getOrCreateMessageChannel } = require('../../src/message/channel-cache');
 
       // Create a channel
       const channel1 = getOrCreateMessageChannel('test-key');

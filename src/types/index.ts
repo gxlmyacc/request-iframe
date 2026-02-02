@@ -163,7 +163,7 @@ export interface PostMessageData {
   /** 
    * Protocol version identifier
    * - Used to identify request-iframe framework messages
-   * - The value represents the protocol version number, current version is 1
+   * - The value represents the protocol version number
    * - Future version upgrades can use this field for compatibility handling
    */
   __requestIframe__: number;
@@ -177,7 +177,7 @@ export interface PostMessageData {
   secretKey?: string;
   /** Message type */
   type: 'request' | 'ack' | 'async' | 'response' | 'error' | 'ping' | 'pong' | 
-        'stream_start' | 'stream_data' | 'stream_end' | 'stream_error' | 'stream_cancel' | 'stream_pull' | 'stream_ack';
+        'stream_start' | 'stream_data' | 'stream_end' | 'stream_error' | 'stream_cancel' | 'stream_pull';
   /** Request ID */
   requestId: string;
   /** Request path */

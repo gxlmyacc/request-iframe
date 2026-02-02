@@ -2,7 +2,8 @@ import { AutoAckConstant, MessageRole, MessageRoleValue, MessageType, OriginCons
 import {
   PostMessageData
 } from '../types';
-import { getProtocolVersion, createPostMessage } from '../utils';
+import { getProtocolVersion, createPostMessage } from '../utils/protocol';
+import { isFunction } from '../utils/is';
 import { getAckId, getAckMeta } from '../utils/ack';
 import { SyncHook } from '../utils/hooks';
 import { requestIframeLog } from '../utils/logger';
@@ -243,70 +244,70 @@ export class MessageDispatcher {
       }
     }
 
-    this.hooks.inbound.call(data, context);
-
-    const type = data.type as string;
-    const version = getProtocolVersion(data);
-
-    /**
-     * Auto-ack state for this incoming message.
-     * - We intentionally couple this to `context.handledBy` as the "accepted/handled" signal.
-     * - For some message types we only ack if they are truly handled (e.g. response requireAck),
-     *   so we avoid incorrectly acknowledging messages when there is no pending consumer.
-     *
-     * Implementation note:
-     * We avoid using Proxy for compatibility and instead hook the `handledBy` property
-     * with a setter so handlers can trigger the ack immediately when they "accept" a message.
-     */
-    const autoAckState = { sent: false };
-    const originalHandledBy = context.handledBy;
-    let handledByValue: string | undefined = originalHandledBy;
     try {
-      Object.defineProperty(context, 'handledBy', {
-        configurable: true,
-        enumerable: true,
-        get() {
-          return handledByValue;
-        },
-        set: (value: string | undefined) => {
-          handledByValue = value;
-          if (value && !autoAckState.sent) {
-            autoAckState.sent = true;
-            this.tryAutoAck(data, context);
-          }
-        }
-      });
-    } catch {
+      this.hooks.inbound.call(data, context);
+
+      const type = data.type as string;
+      const version = getProtocolVersion(data);
+
       /**
-       * In very rare cases `defineProperty` may fail (frozen object).
-       * We still proceed without auto-ack; handlers will continue to work as before.
+       * Auto-ack state for this incoming message.
+       *
+       * Design notes:
+       * - We only auto-ack after the message is truly handled (context.handledBy is set)
+       *   AND accepted (context.acceptedBy is set).
+       * - This prevents incorrectly acknowledging messages when there is no pending consumer.
        */
-    }
+      const autoAckState = { sent: false };
+      const maybeAutoAck = () => {
+        if (autoAckState.sent) return;
+        if (!context.handledBy) return;
+        if (!context.acceptedBy) return;
+        autoAckState.sent = true;
+        this.tryAutoAck(data, context);
+      };
 
-    for (const entry of this.handlers) {
-      if (this.matchType(type, entry.matcher)) {
-        // If message has been handled by a previous handler, stop processing
-        if (context.handledBy) {
-          break;
-        }
+      for (const entry of this.handlers) {
+        if (this.matchType(type, entry.matcher)) {
+          // If message has been handled by a previous handler, stop processing
+          if (context.handledBy) {
+            break;
+          }
 
-        // If handler specified version validation
-        if (entry.versionValidator && version !== undefined) {
-          if (!entry.versionValidator(version)) {
-            // Version incompatible, call error handler (if any)
-            entry.onVersionError?.(data, context, version);
-            continue;  // Skip this handler, try other handlers
+          // If handler specified version validation
+          if (entry.versionValidator && version !== undefined) {
+            if (!entry.versionValidator(version)) {
+              // Version incompatible, call error handler (if any)
+              entry.onVersionError?.(data, context, version);
+              continue;  // Skip this handler, try other handlers
+            }
+          }
+          
+          try {
+            entry.handler(data, context);
+            // After handler execution, check if it marked the message as handled
+            // If context.handledBy is set by the handler, subsequent handlers will be skipped
+          } catch (e) {
+            // Ignore handler exception, continue executing other handlers
+            requestIframeLog('error', 'Handler error', e);
+          } finally {
+            // Auto-ack once the message is accepted + handled.
+            maybeAutoAck();
           }
         }
-        
-        try {
-          entry.handler(data, context);
-          // After handler execution, check if it marked the message as handled
-          // If context.handledBy is set by the handler, subsequent handlers will be skipped
-        } catch (e) {
-          // Ignore handler exception, continue executing other handlers
-          requestIframeLog('error', 'Handler error', e);
-        }
+      }
+
+      // Fallback: if a handler accepted+handled without throwing, ensure we auto-ack.
+      // (This is safe due to autoAckState guard.)
+      maybeAutoAck();
+    } finally {
+      /**
+       * Mark as "done" only when this dispatcher actually claimed/handled this message.
+       * - If the message was never claimed (handledBy not set), we keep `doneBy` empty so another
+       *   dispatcher/handler still has a chance to process it.
+       */
+      if (context.handledBy) {
+        context.markDoneBy(context.handledBy);
       }
     }
   }
@@ -334,7 +335,7 @@ export class MessageDispatcher {
     /**
      * ACK-only requireAck workflow (no compatibility guarantees):
      * - For any message with `requireAck === true`, once the message is accepted/handled
-     *   (via `context.accepted === true` + `context.handledBy` setter hook),
+     *   (via `context.acceptedBy` + `context.handledBy`),
      *   we reply with `ack`.
      *
      * This unifies:
@@ -342,7 +343,7 @@ export class MessageDispatcher {
      * - response receipt confirmation
      * - stream frame delivery confirmation (e.g. stream_data per-frame ack)
      */
-    if (data.requireAck === true && context.accepted === true) {
+    if (data.requireAck === true && !!context.acceptedBy) {
       const ack = this.getAutoAckEchoPayload((data as any).ack);
       this.sendMessage(
         targetWindow,
@@ -386,7 +387,7 @@ export class MessageDispatcher {
     if (matcher instanceof RegExp) {
       return matcher.test(type);
     }
-    if (typeof matcher === 'function') {
+    if (isFunction<[string], boolean>(matcher)) {
       return matcher(type);
     }
     return false;

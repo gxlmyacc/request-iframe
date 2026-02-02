@@ -1,9 +1,11 @@
 import { ErrorResponse, RequestIframeClient, RequestIframeClientOptions } from '../types';
-import { getIframeTargetOrigin, generateInstanceId } from '../utils';
+import { getIframeTargetOrigin } from '../utils/iframe';
+import { generateInstanceId } from '../utils/id';
 import { RequestIframeClientImpl } from '../impl/client';
 import { setupClientDebugInterceptors } from '../utils/debug';
 import { setRequestIframeLogLevel } from '../utils/logger';
 import { Messages, ErrorCode, OriginConstant, LogLevel } from '../constants';
+import { clearMessageChannelCache } from '../message/channel-cache';
 
 /**
  * Create a client (for sending requests)
@@ -82,8 +84,11 @@ export function requestIframeClient(
  * Note: This clears the shared message channel for the specified secretKey
  */
 export function clearRequestIframeClientCache(secretKey?: string): void {
-  // Now client is no longer cached, only need to clear MessageChannel cache
-  // MessageChannel cleanup is handled by clearMessageChannelCache in cache.ts
-  // Empty implementation kept here to maintain API compatibility
-  void secretKey;
+  // Client is not cached; this helper only clears shared MessageChannel cache.
+  // If secretKey is provided, only clear channels under that secretKey.
+  if (typeof secretKey === 'string') {
+    clearMessageChannelCache(secretKey);
+    return;
+  }
+  clearMessageChannelCache();
 }

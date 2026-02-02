@@ -3,6 +3,12 @@ import { HttpHeader } from '../../constants';
 import type { IframeFileReadableStream } from '../../stream';
 
 /**
+ * Endpoint Stream integration layer (`src/endpoint/stream`)
+ *
+ * This directory integrates postMessage `stream_*` messages with the stream object system in `src/stream`:
+ * - Endpoint-side file stream utilities (e.g. choose filename from header/metadata and auto-resolve)
+ * - Does NOT implement the stream protocol itself (protocol lives in `src/stream`)
+ *
  * Parse filename from Content-Disposition header.
  */
 export function parseFilenameFromContentDisposition(value?: string | string[]): string | undefined {

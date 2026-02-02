@@ -1,5 +1,5 @@
 import { requestIframeEndpoint } from '../src/api/endpoint';
-import { clearMessageChannelCache } from '../src/utils/cache';
+import { clearMessageChannelCache } from '../src/message/channel-cache';
 
 describe('api/endpoint (requestIframeEndpoint) - facade', () => {
   beforeEach(() => {

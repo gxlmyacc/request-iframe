@@ -2,7 +2,7 @@ import { MessageDispatcher } from '../src/message/dispatcher';
 import { MessageChannel } from '../src/message/channel';
 import { MessageRole, MessageType, ProtocolVersion } from '../src/constants';
 import { createPostMessage } from '../src/utils';
-import { MessageContext } from '../src/message/channel';
+import { MessageContext, MessageContextStage } from '../src/message/channel';
 
 describe('MessageDispatcher', () => {
   let channel: MessageChannel;
@@ -10,14 +10,37 @@ describe('MessageDispatcher', () => {
   let mockHandler: jest.Mock;
   let mockContext: MessageContext;
 
+  function createTestContext(params?: { origin?: string; source?: Window }): MessageContext {
+    const ctx: any = {
+      source: params?.source ?? window,
+      origin: params?.origin ?? 'https://example.com',
+      acceptedBy: undefined,
+      handledBy: undefined
+    };
+    ctx.markHandledBy = (handledBy: string) => {
+      if (!ctx.handledBy) ctx.handledBy = handledBy;
+    };
+    ctx.markAcceptedBy = (handledBy: string) => {
+      if (!ctx.acceptedBy) ctx.acceptedBy = handledBy;
+      ctx.markHandledBy(handledBy);
+    };
+    ctx.markDoneBy = (doneBy: string) => {
+      ctx.doneBy = doneBy;
+    };
+    ctx.getStage = () => {
+      if (ctx.doneBy) return MessageContextStage.DONE;
+      if (ctx.acceptedBy) return MessageContextStage.ACCEPTED;
+      if (ctx.handledBy) return MessageContextStage.HANDLING;
+      return MessageContextStage.PENDING;
+    };
+    return ctx as MessageContext;
+  }
+
   beforeEach(() => {
     channel = new MessageChannel();
     dispatcher = new MessageDispatcher(channel, MessageRole.CLIENT, 'instance-1');
     mockHandler = jest.fn();
-    mockContext = {
-      source: window,
-      origin: 'https://example.com'
-    };
+    mockContext = createTestContext();
   });
 
   afterEach(() => {
@@ -340,8 +363,7 @@ describe('MessageDispatcher', () => {
       const postSpy = jest.spyOn(window, 'postMessage').mockImplementation();
 
       dispatcher.registerHandler(MessageType.REQUEST, (_data, context) => {
-        context.accepted = true;
-        context.handledBy = 'instance-1';
+        context.markAcceptedBy('instance-1');
       });
 
       const bigAck = { id: 'ack-1', meta: 'x'.repeat(6000) };
@@ -366,8 +388,7 @@ describe('MessageDispatcher', () => {
 
       dispatcher.setAutoAckLimits({ maxMetaLength: 1 });
       dispatcher.registerHandler(MessageType.REQUEST, (_data, context) => {
-        context.accepted = true;
-        context.handledBy = 'instance-1';
+        context.markAcceptedBy('instance-1');
       });
 
       const message = createPostMessage(MessageType.REQUEST, 'req123', {

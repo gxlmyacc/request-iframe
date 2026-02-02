@@ -5,7 +5,7 @@ import { MessageType } from '../constants';
 import { matchOrigin } from '../utils/origin';
 import { RequestIframeEndpointHub } from './infra/hub';
 import { RequestIframeEndpointInbox } from './infra/inbox';
-import { RequestIframeEndpointStreamRouter } from './stream/router';
+import { RequestIframeStreamDispatcher } from './stream/dispatcher';
 import { RequestIframeEndpointHeartbeat } from './heartbeat/heartbeat';
 import { createPingResponder } from './heartbeat/ping';
 import { createReadableStreamFromStart } from './stream/factory';
@@ -17,16 +17,16 @@ import type { RequestIframeEndpointOutbox } from './infra/outbox';
 /**
  * RequestIframeEndpointFacade
  *
- * 将 endpoint 常用的“装配/组合逻辑”统一收敛到一个地方，供 client/server 作为 thin wrapper 复用：
- * - hub（MessageDispatcher 生命周期）
- * - inbox（ACK/ASYNC/RESPONSE/ERROR/PING/PONG/STREAM_START 入站处理，可选）
- * - streamRouter（stream_* 路由）
- * - heartbeat（ping -> wait pong，可选）
- * - originValidator（allowedOrigins/validateOrigin 的统一构建）
+ * Centralizes the common "composition/assembly logic" for endpoints so client/server can reuse it as thin wrappers:
+ * - hub (MessageDispatcher lifecycle + shared infra)
+ * - inbox (inbound message handling: ACK/ASYNC/RESPONSE/ERROR/PING/PONG/STREAM_START, optional)
+ * - streamDispatcher (dispatch `stream_*` frames)
+ * - heartbeat (ping -> wait pong helper, optional)
+ * - originValidator (unified construction for allowedOrigins/validateOrigin)
  */
 export class RequestIframeEndpointFacade {
   public readonly hub: RequestIframeEndpointHub;
-  public readonly streamRouter: RequestIframeEndpointStreamRouter;
+  public readonly streamDispatcher: RequestIframeStreamDispatcher;
   public readonly inbox?: RequestIframeEndpointInbox;
   public readonly heartbeat?: RequestIframeEndpointHeartbeat;
   public readonly originValidator?: (origin: string, data: PostMessageData, context: MessageContext) => boolean;
@@ -40,24 +40,24 @@ export class RequestIframeEndpointFacade {
     autoAckMaxMetaLength?: number;
     autoAckMaxIdLength?: number;
     /**
-     * 自定义 handler 注册逻辑（通常用于 server：REQUEST/ACK/STREAM_START 等）。
-     * 如果同时提供 inbox，则优先使用 inbox.registerHandlers。
+     * Custom handler registration logic (typically for server: REQUEST/ACK/STREAM_START, etc.).
+     * If inbox is provided, prefer inbox.registerHandlers.
      */
     registerHandlers?: () => void;
     /**
-     * 是否创建 inbox（通常用于 client：入站消息处理 + pending 驱动）。
+     * Whether to create inbox (typically for client: inbound handling + pending driving).
      */
     inbox?: {
       versionValidator?: VersionValidator;
     };
     /**
-     * streamRouter handledBy（默认 instanceId）。
+     * streamDispatcher handledBy (default: instanceId).
      */
-    streamRouter?: {
+    streamDispatcher?: {
       handledBy?: string;
     };
     /**
-     * 是否创建 heartbeat（通常用于 server：pingClient/handlePong）。
+     * Whether to create heartbeat (typically for server: pingPeer/handlePong).
      */
     heartbeat?: {
       pendingBucket: string;
@@ -77,7 +77,9 @@ export class RequestIframeEndpointFacade {
       autoAckMaxIdLength: params.autoAckMaxIdLength
     });
 
-    this.streamRouter = new RequestIframeEndpointStreamRouter({ handledBy: params.streamRouter?.handledBy ?? params.instanceId });
+    this.streamDispatcher = new RequestIframeStreamDispatcher({
+      handledBy: params.streamDispatcher?.handledBy ?? params.instanceId
+    });
 
     this.originValidator = RequestIframeEndpointFacade.buildOriginValidator(params.originValidator);
 
@@ -124,47 +126,10 @@ export class RequestIframeEndpointFacade {
   }
 
   /**
-   * Register client-side base handlers:
-   * - ACK/PONG: resolve isConnect waiter (ping from client to server)
-   *
-   * Note: inbox must already be created for request/response pending handling.
-   */
-  public registerClientBaseHandlers(params: {
-    handledBy: string;
-    isOriginAllowed?: (data: PostMessageData, context: MessageContext) => boolean;
-  }): void {
-    this.onOpen(() => {
-      const baseHandlerOptions = this.hub.createHandlerOptions(() => {
-        /** ignore version errors for base infra */
-      });
-
-      /**
-       * isConnect waiter handlers:
-       * - inbox may also have ACK handler, but it won't mark handledBy if missing pending,
-       *   so we can still catch isConnect ACK here.
-       */
-      this.hub.registerHandler(
-        MessageType.ACK,
-        (data, context) => {
-          this.handleIsConnectAck(data, context, params);
-        },
-        baseHandlerOptions
-      );
-      this.hub.registerHandler(
-        MessageType.PONG,
-        (data, context) => {
-          this.handleIsConnectPong(data, context, params);
-        },
-        baseHandlerOptions
-      );
-    });
-  }
-
-  /**
    * Register client-side stream callback handlers:
    * - stream_* (except stream_start) -> core.getStreamCallback()
    *
-   * This makes stream routing pluggable and owned by the facade.
+   * This makes stream dispatching pluggable and owned by the facade.
    */
   public registerClientStreamCallbackHandlers(params: { handlerOptions: HandlerOptions }): void {
     this.onOpen(() => {
@@ -177,9 +142,9 @@ export class RequestIframeEndpointFacade {
   }
 
   /**
-   * Enable default stream routing: dispatch stream_* messages to streamRouter.
+   * Enable default stream dispatching: dispatch stream_* messages to streamDispatcher.
    */
-  public enableStreamRouterCallback(params?: {
+  public enableStreamDispatcherCallback(params?: {
     isOriginAllowed?: (data: PostMessageData, context: MessageContext) => boolean;
   }): void {
     this.hub.setStreamCallback((data, context) => {
@@ -187,7 +152,7 @@ export class RequestIframeEndpointFacade {
     });
   }
 
-  public disableStreamRouterCallback(): void {
+  public disableStreamDispatcherCallback(): void {
     this.hub.setStreamCallback(undefined);
   }
 
@@ -428,23 +393,17 @@ export class RequestIframeEndpointFacade {
     targetId?: string;
     onPeerId?: (peerId?: string) => void;
   }): Promise<boolean> {
-    const requestId = `ping_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return new Promise((resolve) => {
-      const timeoutId = this.hub.pending.setTimeout(() => {
-        this.hub.pending.delete(RequestIframeEndpointFacade.PENDING_IS_CONNECT, requestId);
-        resolve(false);
-      }, params.timeoutMs);
-      this.hub.pending.set(RequestIframeEndpointFacade.PENDING_IS_CONNECT, requestId, {
-        resolve,
-        timeoutId,
-        targetOrigin: params.targetOrigin,
-        onPeerId: params.onPeerId
-      });
-      params.peer.sendMessage(MessageType.PING, requestId, { requireAck: true, targetId: params.targetId });
+    const inbox = this.inbox as RequestIframeEndpointInbox | undefined;
+    if (!inbox) return Promise.resolve(false);
+    return inbox.pingIsConnect({
+      peer: params.peer,
+      timeoutMs: params.timeoutMs,
+      targetOrigin: params.targetOrigin,
+      targetId: params.targetId,
+      onPeerId: params.onPeerId,
+      originValidator: this.originValidator
     });
   }
-
-  private static readonly PENDING_IS_CONNECT = 'endpoint:pendingIsConnect';
 
   /**
    * Pending ACK waiter bucket entry.
@@ -490,91 +449,11 @@ export class RequestIframeEndpointFacade {
       return;
     }
 
-    if (!params.context.handledBy) {
-      params.context.handledBy = params.handledBy;
-    }
+    params.context.markHandledBy(params.handledBy);
 
     this.hub.pending.clearTimeout(pending.timeoutId);
     this.hub.pending.delete(bucket, params.data.requestId);
     pending.resolve(true, (params.data as any).ack);
-  }
-
-  /**
-   * Handle ACK for isConnect ping waiter.
-   */
-  private handleIsConnectAck(
-    data: PostMessageData,
-    context: MessageContext,
-    params: { handledBy: string; isOriginAllowed?: (data: PostMessageData, context: MessageContext) => boolean }
-  ): boolean {
-    const pending = this.hub.pending.get<string, any>(RequestIframeEndpointFacade.PENDING_IS_CONNECT, data.requestId);
-    if (!pending) return false;
-
-    /** Optional extra origin guard (coarse filter) */
-    if (params.isOriginAllowed && !params.isOriginAllowed(data, context)) {
-      if (!context.handledBy) {
-        context.accepted = true;
-        context.handledBy = params.handledBy;
-      }
-      return true; // handled but ignored
-    }
-
-    /** Must match the pending target origin (and originValidator if configured) */
-    if (!this.hub.isOriginAllowedBy(context.origin, data, context, pending.targetOrigin, this.originValidator)) {
-      if (!context.handledBy) {
-        context.accepted = true;
-        context.handledBy = params.handledBy;
-      }
-      return true; // handled but ignored
-    }
-    if (!context.handledBy) {
-      context.accepted = true;
-      context.handledBy = params.handledBy;
-    }
-    this.hub.pending.clearTimeout(pending.timeoutId);
-    this.hub.pending.delete(RequestIframeEndpointFacade.PENDING_IS_CONNECT, data.requestId);
-    pending.onPeerId?.(data.creatorId);
-    pending.resolve(true);
-    return true;
-  }
-
-  /**
-   * Handle PONG for isConnect ping waiter.
-   */
-  private handleIsConnectPong(
-    data: PostMessageData,
-    context: MessageContext,
-    params: { handledBy: string; isOriginAllowed?: (data: PostMessageData, context: MessageContext) => boolean }
-  ): boolean {
-    const pending = this.hub.pending.get<string, any>(RequestIframeEndpointFacade.PENDING_IS_CONNECT, data.requestId);
-    if (!pending) return false;
-
-    /** Optional extra origin guard (coarse filter) */
-    if (params.isOriginAllowed && !params.isOriginAllowed(data, context)) {
-      if (!context.handledBy) {
-        context.accepted = true;
-        context.handledBy = params.handledBy;
-      }
-      return true; // handled but ignored
-    }
-
-    /** Must match the pending target origin (and originValidator if configured) */
-    if (!this.hub.isOriginAllowedBy(context.origin, data, context, pending.targetOrigin, this.originValidator)) {
-      if (!context.handledBy) {
-        context.accepted = true;
-        context.handledBy = params.handledBy;
-      }
-      return true; // handled but ignored
-    }
-    if (!context.handledBy) {
-      context.accepted = true;
-      context.handledBy = params.handledBy;
-    }
-    this.hub.pending.clearTimeout(pending.timeoutId);
-    this.hub.pending.delete(RequestIframeEndpointFacade.PENDING_IS_CONNECT, data.requestId);
-    pending.onPeerId?.(data.creatorId);
-    pending.resolve(true);
-    return true;
   }
 
   /**
@@ -586,7 +465,7 @@ export class RequestIframeEndpointFacade {
     params?: { isOriginAllowed?: (data: PostMessageData, context: MessageContext) => boolean }
   ): void {
     if (params?.isOriginAllowed && !params.isOriginAllowed(data, context)) return;
-    this.streamRouter.dispatch(data, context);
+    this.streamDispatcher.dispatch(data, context);
   }
 
   /**
@@ -623,7 +502,7 @@ export class RequestIframeEndpointFacade {
     this.hub.pending.delete(params.pendingBucket, data.requestId);
 
     const streamHandler: StreamMessageHandler = createStreamMessageHandler({
-      router: this.streamRouter,
+      dispatcher: this.streamDispatcher,
       postMessage: (message) => {
         this.hub.messageDispatcher.send(pending.targetWindow, message, pending.targetOrigin);
       }

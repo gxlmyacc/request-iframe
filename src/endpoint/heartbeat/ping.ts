@@ -21,10 +21,7 @@ export function createPingResponder(params: {
   return (data, context) => {
     if (!context.source) return;
     /** Mark accepted so MessageDispatcher can auto-send ACK when requireAck === true */
-    if (!context.handledBy) {
-      context.accepted = true;
-      context.handledBy = handledBy;
-    }
+    context.markAcceptedBy(handledBy);
     /** Reply PONG */
     hub.messageDispatcher.sendMessage(
       context.source,

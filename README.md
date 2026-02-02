@@ -864,7 +864,7 @@ server.on('/api/uploadStream', async (req, res) => {
 
 **Pull/Ack protocol (default):**
 - Writer only sends `stream_data` when it has received `stream_pull`, enabling real backpressure.
-  - Disconnect detection does not rely on `stream_ack`, but uses `streamTimeout + heartbeat(isConnect)`.
+  - Disconnect detection does not rely on a dedicated per-frame ack message type, but uses `streamTimeout + heartbeat(isConnect)`.
 
 **consume default change:**
 - `for await (const chunk of response.stream)` defaults to **consume and drop** already iterated chunks (`consume: true`) to prevent unbounded memory growth for long streams.

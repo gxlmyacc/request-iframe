@@ -60,10 +60,7 @@ export class RequestIframeEndpointHeartbeat {
       return;
     }
 
-    if (!context.handledBy) {
-      context.accepted = true;
-      context.handledBy = this.handledBy;
-    }
+    context.markAcceptedBy(this.handledBy);
 
     this.hub.pending.clearTimeout(pending.timeoutId);
     this.hub.pending.delete(this.pendingBucket, data.requestId);

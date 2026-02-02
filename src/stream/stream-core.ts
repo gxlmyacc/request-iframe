@@ -6,7 +6,8 @@ import type {
   StreamEventName,
   StreamEventListener
 } from './types';
-import { StreamState as StreamStateConstant, Messages, StreamEvent } from '../constants';
+import { StreamState as StreamStateConstant, Messages, StreamEvent, ErrorCode } from '../constants';
+import { RequestIframeStreamError } from './error';
 
 /**
  * Shared stream core (internal).
@@ -183,7 +184,11 @@ export class IframeStreamCore<T = any> {
       this._state === StreamStateConstant.CANCELLED
     ) return;
     this._state = StreamStateConstant.CANCELLED;
-    this.terminalError = new Error(reason || Messages.STREAM_CANCELLED);
+    this.terminalError = new RequestIframeStreamError({
+      message: reason || Messages.STREAM_CANCELLED,
+      code: ErrorCode.STREAM_CANCELLED,
+      streamId: this.streamId
+    });
     this.emit(StreamEvent.CANCEL, { reason, error: this.terminalError });
     this.emit(StreamEvent.STATE, { state: this._state });
     this.notifyWaiters();

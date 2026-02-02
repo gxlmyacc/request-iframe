@@ -125,7 +125,23 @@ export const ErrorCode = {
   /** Too many concurrent requests (rate limiting) */
   TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
   /** Stream start not received in time */
-  STREAM_START_TIMEOUT: 'STREAM_START_TIMEOUT'
+  STREAM_START_TIMEOUT: 'STREAM_START_TIMEOUT',
+  /** Stream has already started */
+  STREAM_ALREADY_STARTED: 'STREAM_ALREADY_STARTED',
+  /** Stream has ended */
+  STREAM_ENDED: 'STREAM_ENDED',
+  /** Stream idle timeout */
+  STREAM_TIMEOUT: 'STREAM_TIMEOUT',
+  /** Stream expired */
+  STREAM_EXPIRED: 'STREAM_EXPIRED',
+  /** Stream read error */
+  STREAM_READ_ERROR: 'STREAM_READ_ERROR',
+  /** Stream write() is only available when mode is push */
+  STREAM_WRITE_ONLY_IN_PUSH_MODE: 'STREAM_WRITE_ONLY_IN_PUSH_MODE',
+  /** Stream pending queue overflow */
+  STREAM_PENDING_QUEUE_OVERFLOW: 'STREAM_PENDING_QUEUE_OVERFLOW',
+  /** Stream pending bytes overflow */
+  STREAM_PENDING_BYTES_OVERFLOW: 'STREAM_PENDING_BYTES_OVERFLOW'
 } as const;
 
 /**
@@ -158,8 +174,6 @@ export const MessageType = {
   STREAM_CANCEL: 'stream_cancel',
   /** Stream pull (receiver requests next chunks) */
   STREAM_PULL: 'stream_pull',
-  /** Stream ack (receiver acknowledges a chunk) */
-  STREAM_ACK: 'stream_ack'
 } as const;
 
 export const MessageRole = {

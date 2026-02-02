@@ -2,10 +2,10 @@ import type { HandlerOptions, MessageHandlerFn, MessageTypeMatcher, VersionValid
 import { MessageDispatcher } from '../../message';
 import type { PostMessageData } from '../../types';
 import type { MessageContext } from '../../message';
-import { isCompatibleVersion } from '../../utils';
+import { isCompatibleVersion } from '../../utils/protocol';
 import { OriginConstant, Messages } from '../../constants';
 import type { MessageRoleValue } from '../../constants';
-import { getOrCreateMessageChannel, releaseMessageChannel } from '../../utils/cache';
+import { getOrCreateMessageChannel, releaseMessageChannel } from '../../message/channel-cache';
 import { RequestIframeEndpointOutbox } from './outbox';
 import { SyncHook } from '../../utils/hooks';
 

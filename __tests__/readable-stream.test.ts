@@ -69,7 +69,10 @@ describe('stream/readable-stream (IframeReadableStream)', () => {
     mh.emit('sid', { streamId: 'sid', type: StreamInternalMessageType.DATA, data: 'x', seq: 0, done: true });
     await flushMicrotasks();
 
-    expect(mh.posted.some((m) => m?.type === MessageType.STREAM_ACK)).toBe(false);
+    // Stream protocol does not send any dedicated "stream_ack" message type.
+    // Per-frame requireAck (when enabled by writer) uses the unified `ack` message type.
+    expect(mh.posted.some((m) => m?.type === 'stream_ack')).toBe(false);
+    expect(mh.posted.some((m) => m?.type === MessageType.ACK)).toBe(false);
     await expect(rs.read()).resolves.toBe('x');
   });
 

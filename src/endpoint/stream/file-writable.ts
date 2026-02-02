@@ -1,7 +1,13 @@
 import type { IframeFileWritableStream } from '../../stream';
-import { blobToBase64 } from '../../utils';
+import { blobToBase64 } from '../../utils/blob';
 
 /**
+ * Endpoint Stream integration layer (`src/endpoint/stream`)
+ *
+ * This directory integrates postMessage `stream_*` messages with the stream object system in `src/stream`:
+ * - Endpoint-side File/Blob -> IframeFileWritableStream adaptation (for sendFile / res.sendFile)
+ * - Does NOT implement the stream protocol itself (protocol lives in `src/stream`)
+ *
  * Create an IframeFileWritableStream from content.
  *
  * Shared by:

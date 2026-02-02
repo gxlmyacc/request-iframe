@@ -7,10 +7,13 @@ import {
   WritableStreamMode,
   StreamFrameOptions
 } from './types';
-import { createPostMessage, generateRequestId } from '../utils';
-import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamMode as StreamModeConstant, MessageRole, formatMessage, DefaultTimeout, StreamInternalMessageType, StreamEvent } from '../constants';
+import { createPostMessage } from '../utils/protocol';
+import { generateRequestId } from '../utils/id';
+import { isFunction } from '../utils/is';
+import { MessageType, Messages, StreamType as StreamTypeConstant, StreamState as StreamStateConstant, StreamMode as StreamModeConstant, MessageRole, formatMessage, DefaultTimeout, StreamInternalMessageType, StreamEvent, ErrorCode } from '../constants';
 import type { StreamMessageData } from './types';
 import { IframeStreamCore } from './stream-core';
+import { RequestIframeStreamError } from './error';
 
 /**
  * Generate a unique stream ID
@@ -94,14 +97,24 @@ export class IframeWritableStream
   }): void {
     const max = this.maxPendingChunks;
     if (typeof max === 'number' && max > 0 && this.pendingQueue.length >= max) {
-      throw new Error(formatMessage(Messages.STREAM_PENDING_QUEUE_OVERFLOW, max));
+      throw new RequestIframeStreamError({
+        message: formatMessage(Messages.STREAM_PENDING_QUEUE_OVERFLOW, max),
+        code: ErrorCode.STREAM_PENDING_QUEUE_OVERFLOW,
+        streamId: this.streamId,
+        requestId: this.context?.requestId
+      });
     }
     const bytes = this.estimateChunkBytes(item.data);
     const maxBytes = this.maxPendingBytes;
     if (typeof maxBytes === 'number' && maxBytes > 0) {
       const next = this.pendingBytes + bytes;
       if (!Number.isFinite(next) || next > maxBytes) {
-        throw new Error(formatMessage(Messages.STREAM_PENDING_BYTES_OVERFLOW, maxBytes));
+        throw new RequestIframeStreamError({
+          message: formatMessage(Messages.STREAM_PENDING_BYTES_OVERFLOW, maxBytes),
+          code: ErrorCode.STREAM_PENDING_BYTES_OVERFLOW,
+          streamId: this.streamId,
+          requestId: this.context?.requestId
+        });
       }
     }
     this.pendingQueue.push({ ...item, bytes });
@@ -254,7 +267,11 @@ export class IframeWritableStream
    */
   private sendMessage(type: string, data?: Record<string, any>): boolean {
     if (!this.context) {
-      throw new Error(Messages.STREAM_NOT_BOUND);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_NOT_BOUND,
+        code: ErrorCode.STREAM_NOT_BOUND,
+        streamId: this.streamId
+      });
     }
     const isClientStream = this.context.clientId !== undefined && this.context.serverId === undefined;
     const role = isClientStream ? MessageRole.CLIENT : MessageRole.SERVER;
@@ -276,7 +293,12 @@ export class IframeWritableStream
       this.clearExpireTimer();
       // For most stream messages, if we cannot send, treat as a hard cancellation signal
       // so callers can stop further processing immediately.
-      throw new Error(formatMessage(Messages.STREAM_CANCELLED, Messages.TARGET_WINDOW_CLOSED));
+      throw new RequestIframeStreamError({
+        message: formatMessage(Messages.STREAM_CANCELLED, Messages.TARGET_WINDOW_CLOSED),
+        code: ErrorCode.TARGET_WINDOW_CLOSED,
+        streamId: this.streamId,
+        requestId: this.context.requestId
+      });
     }
     return true;
   }
@@ -285,14 +307,14 @@ export class IframeWritableStream
     if (this.ackReceiverRegistered) return;
     if (!this.context) return;
     const ch: any = this.context.channel as any;
-    if (typeof ch.addReceiver !== 'function' || typeof ch.removeReceiver !== 'function') return;
+    if (!isFunction(ch.addReceiver) || !isFunction(ch.removeReceiver)) return;
 
     this.ackReceiver = (data: any, context: any) => {
       if (!data || data.type !== MessageType.ACK) return;
       const pending = this.ackWaiters.get(data.requestId);
       if (!pending) return;
       if (context && !context.handledBy) {
-        context.handledBy = `stream:${this.streamId}`;
+        context.markHandledBy(`stream:${this.streamId}`);
       }
       clearTimeout(pending.timeoutId);
       this.ackWaiters.delete(data.requestId);
@@ -312,7 +334,7 @@ export class IframeWritableStream
 
     if (this.ackReceiverRegistered && this.ackReceiver && this.context) {
       const ch: any = this.context.channel as any;
-      if (typeof ch.removeReceiver === 'function') {
+      if (isFunction(ch.removeReceiver)) {
         try {
           ch.removeReceiver(this.ackReceiver);
         } catch {
@@ -359,11 +381,20 @@ export class IframeWritableStream
    */
   public async start(): Promise<void> {
     if (!this.context) {
-      throw new Error(Messages.STREAM_NOT_BOUND);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_NOT_BOUND,
+        code: ErrorCode.STREAM_NOT_BOUND,
+        streamId: this.streamId
+      });
     }
     
     if (this._state !== StreamStateConstant.PENDING) {
-      throw new Error(Messages.STREAM_ALREADY_STARTED);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_ALREADY_STARTED,
+        code: ErrorCode.STREAM_ALREADY_STARTED,
+        streamId: this.streamId,
+        requestId: this.context.requestId
+      });
     }
 
     this.completionPromise = new Promise<void>((resolve, reject) => {
@@ -424,16 +455,31 @@ export class IframeWritableStream
     options?: StreamFrameOptions
   ): void | Promise<boolean> {
     if (this.mode !== StreamModeConstant.PUSH) {
-      throw new Error(Messages.STREAM_WRITE_ONLY_IN_PUSH_MODE);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_WRITE_ONLY_IN_PUSH_MODE,
+        code: ErrorCode.STREAM_WRITE_ONLY_IN_PUSH_MODE,
+        streamId: this.streamId,
+        requestId: this.context?.requestId
+      });
     }
     if (this._state === StreamStateConstant.PENDING) {
       /**
        * In push mode, users must call start() first so STREAM_START is sent and binding is complete.
        */
-      throw new Error(Messages.STREAM_NOT_BOUND);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_NOT_BOUND,
+        code: ErrorCode.STREAM_NOT_BOUND,
+        streamId: this.streamId,
+        requestId: this.context?.requestId
+      });
     }
     if (this._state !== StreamStateConstant.STREAMING) {
-      throw new Error(Messages.STREAM_ENDED);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_ENDED,
+        code: ErrorCode.STREAM_ENDED,
+        streamId: this.streamId,
+        requestId: this.context?.requestId
+      });
     }
 
     const done = typeof doneOrOptions === 'boolean' ? doneOrOptions : false;
@@ -539,7 +585,11 @@ export class IframeWritableStream
     options?: { requestId?: string; requireAck?: boolean }
   ): void {
     if (!this.context) {
-      throw new Error(Messages.STREAM_NOT_BOUND);
+      throw new RequestIframeStreamError({
+        message: Messages.STREAM_NOT_BOUND,
+        code: ErrorCode.STREAM_NOT_BOUND,
+        streamId: this.streamId
+      });
     }
     const seq = this.seq++;
 
@@ -571,7 +621,12 @@ export class IframeWritableStream
     if (!ok) {
       this._state = StreamStateConstant.CANCELLED;
       this.clearExpireTimer();
-      throw new Error(formatMessage(Messages.STREAM_CANCELLED, Messages.TARGET_WINDOW_CLOSED));
+      throw new RequestIframeStreamError({
+        message: formatMessage(Messages.STREAM_CANCELLED, Messages.TARGET_WINDOW_CLOSED),
+        code: ErrorCode.TARGET_WINDOW_CLOSED,
+        streamId: this.streamId,
+        requestId: this.context.requestId
+      });
     }
     this.emit(StreamEvent.SEND, { seq, done });
   }
@@ -610,7 +665,17 @@ export class IframeWritableStream
         this.pendingQueue.length = 0;
         this.pendingBytes = 0;
         this.cleanupAckWaiters();
-        this.rejectCompletion?.(e instanceof Error ? e : new Error(String(e)));
+        this.rejectCompletion?.(
+          e instanceof Error
+            ? e
+            : new RequestIframeStreamError({
+                message: String(e),
+                code: ErrorCode.STREAM_ERROR,
+                streamId: this.streamId,
+                requestId: this.context?.requestId,
+                cause: e
+              })
+        );
         throw e;
       }
       if (item.done) {
@@ -662,7 +727,14 @@ export class IframeWritableStream
     this.sendMessage(MessageType.STREAM_ERROR, {
       error: message
     });
-    this.emit(StreamEvent.ERROR, { error: new Error(message) });
+    this.emit(StreamEvent.ERROR, {
+      error: new RequestIframeStreamError({
+        message,
+        code: ErrorCode.STREAM_ERROR,
+        streamId: this.streamId,
+        requestId: this.context?.requestId
+      })
+    });
     this.emit(StreamEvent.STATE, { state: this._state });
     this.cleanupAckWaiters();
     this.clearAllListeners();
