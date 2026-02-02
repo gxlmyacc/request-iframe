@@ -2,10 +2,12 @@ import { ErrorResponse, RequestIframeClient, RequestIframeClientOptions } from '
 import { getIframeTargetOrigin } from '../utils/iframe';
 import { generateInstanceId } from '../utils/id';
 import { RequestIframeClientImpl } from '../impl/client';
-import { setupClientDebugInterceptors } from '../utils/debug';
 import { setRequestIframeLogLevel } from '../utils/logger';
 import { Messages, ErrorCode, OriginConstant, LogLevel } from '../constants';
 import { clearMessageChannelCache } from '../message/channel-cache';
+import { warnUnsafeTargetOriginForWindow } from '../utils/warnings';
+import { ensureClientDebugInterceptors, loadDebugModule, wrapClientMethodsForDebug } from '../utils/debug-lazy';
+import { applyStrictClientSecurityDefaults } from '../utils/strict-mode';
 
 /**
  * Create a client (for sending requests)
@@ -20,12 +22,12 @@ export function requestIframeClient(
   options?: RequestIframeClientOptions
 ): RequestIframeClient {
   let targetWindow: Window | null = null;
-  let targetOrigin: string = OriginConstant.ANY;
+  let defaultTargetOrigin: string = OriginConstant.ANY;
 
   if ((target as HTMLIFrameElement).tagName === 'IFRAME') {
     const iframe = target as HTMLIFrameElement;
     targetWindow = iframe.contentWindow;
-    targetOrigin = getIframeTargetOrigin(iframe);
+    defaultTargetOrigin = getIframeTargetOrigin(iframe);
     if (!targetWindow) {
       throw {
         message: Messages.IFRAME_NOT_READY,
@@ -34,16 +36,27 @@ export function requestIframeClient(
     }
   } else {
     targetWindow = target as Window;
-    targetOrigin = OriginConstant.ANY;
+    defaultTargetOrigin = OriginConstant.ANY;
   }
 
-  // Allow user to override targetOrigin explicitly
-  if (options?.targetOrigin) {
-    targetOrigin = options.targetOrigin;
-  }
+  const resolved = applyStrictClientSecurityDefaults(defaultTargetOrigin, options);
+  const targetOrigin = resolved.targetOrigin;
+  const resolvedOptions = resolved.options ?? options;
+
+  /**
+   * P1: warn on unsafe default targetOrigin for Window targets.
+   * - If targetOrigin is '*' and user did not configure allowedOrigins/validateOrigin,
+   *   incoming message origin validation is effectively disabled.
+   */
+  warnUnsafeTargetOriginForWindow({
+    isIframeTarget: (target as any).tagName === 'IFRAME',
+    targetOrigin,
+    allowedOrigins: resolvedOptions?.allowedOrigins,
+    validateOrigin: resolvedOptions?.validateOrigin
+  });
 
   // Determine secretKey
-  const secretKey = options?.secretKey;
+  const secretKey = resolvedOptions?.secretKey;
   
   // Generate instance ID first (will be used by both client and server)
   const instanceId = generateInstanceId();
@@ -51,16 +64,16 @@ export function requestIframeClient(
   // Create client instance (internally creates its core message server)
   const client = new RequestIframeClientImpl(targetWindow, targetOrigin, {
     secretKey,
-    ackTimeout: options?.ackTimeout,
-    timeout: options?.timeout,
-    asyncTimeout: options?.asyncTimeout,
-    returnData: options?.returnData,
-    headers: options?.headers,
-    allowedOrigins: options?.allowedOrigins,
-    validateOrigin: options?.validateOrigin,
-    autoOpen: options?.autoOpen,
-    autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
-    autoAckMaxIdLength: options?.autoAckMaxIdLength
+    ackTimeout: resolvedOptions?.ackTimeout,
+    timeout: resolvedOptions?.timeout,
+    asyncTimeout: resolvedOptions?.asyncTimeout,
+    returnData: resolvedOptions?.returnData,
+    headers: resolvedOptions?.headers,
+    allowedOrigins: resolvedOptions?.allowedOrigins,
+    validateOrigin: resolvedOptions?.validateOrigin,
+    autoOpen: resolvedOptions?.autoOpen,
+    autoAckMaxMetaLength: resolvedOptions?.autoAckMaxMetaLength,
+    autoAckMaxIdLength: resolvedOptions?.autoAckMaxIdLength
   }, instanceId);
 
   /**
@@ -68,11 +81,21 @@ export function requestIframeClient(
    * - default: only warn/error will be printed (logger default)
    * - if trace enabled: raise log level and (optionally) enable detailed debug interceptors
    */
-  if (options?.trace) {
-    const level = options.trace === true ? LogLevel.TRACE : options.trace;
+  if (resolvedOptions?.trace) {
+    const level = resolvedOptions.trace === true ? LogLevel.TRACE : resolvedOptions.trace;
     setRequestIframeLogLevel(level);
     if (level === LogLevel.TRACE || level === LogLevel.INFO) {
-      setupClientDebugInterceptors(client);
+      /**
+       * Lazy-load debug hooks to keep main bundle smaller, but still ensure
+       * the first request in trace mode won't miss debug interceptors.
+       */
+      wrapClientMethodsForDebug(client);
+      // Preheat import early (best-effort)
+      void loadDebugModule().catch(() => {
+        /** ignore */
+      });
+      // Attach ASAP (best-effort)
+      void ensureClientDebugInterceptors(client);
     }
   }
 

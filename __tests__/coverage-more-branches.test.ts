@@ -395,10 +395,14 @@ describe('coverage: misc low-branch modules', () => {
       }
     }
     const w = new TestFileWritableStream({ filename: 'f', mimeType: 'text/plain', next: async () => ({ data: '', done: true }) });
-    expect(typeof w._encode(new Uint8Array([1, 2, 3]))).toBe('string');
-    expect(typeof w._encode(new ArrayBuffer(2))).toBe('string');
-    expect(w._encode('abc')).toBe('abc');
-    expect(w._encode(123 as any)).toBe('123');
+    expect(typeof w._encode(new Uint8Array([1, 2, 3]))).toBe('object');
+    expect(typeof w._encode(new ArrayBuffer(2))).toBe('object');
+    expect(w._encode('abc')).toBeInstanceOf(Uint8Array);
+    expect(Array.from(w._encode('abc') as Uint8Array)).toEqual(Array.from(Uint8Array.from(Buffer.from('abc', 'utf8'))));
+    expect(w._encode(123 as any)).toBeInstanceOf(Uint8Array);
+    expect(Array.from(w._encode(123 as any) as Uint8Array)).toEqual(
+      Array.from(Uint8Array.from(Buffer.from('123', 'utf8')))
+    );
 
     const handler: StreamMessageHandler = { registerStreamHandler: jest.fn(), unregisterStreamHandler: jest.fn(), postMessage: jest.fn() };
     class TestFileReadableStream extends IframeFileReadableStream {

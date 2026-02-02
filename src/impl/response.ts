@@ -245,11 +245,12 @@ export class ServerResponseImpl implements ServerResponse {
       content,
       fileName: options?.fileName,
       mimeType: options?.mimeType,
-      chunked: false,
-      autoResolve: true,
+      chunked: options?.chunked ?? false,
+      chunkSize: options?.chunkSize,
+      autoResolve: options?.autoResolve ?? true,
       defaultFileName: 'file',
-      defaultMimeType: 'application/octet-stream'
-      ,onFileInfo: ({ fileName, mimeType }) => {
+      defaultMimeType: 'application/octet-stream',
+      onFileInfo: ({ fileName, mimeType }) => {
         // Set file-related headers
         this.setHeader(HttpHeader.CONTENT_TYPE, mimeType);
         if (fileName) {

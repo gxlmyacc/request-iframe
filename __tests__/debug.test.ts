@@ -217,7 +217,7 @@ describe('debug', () => {
                       requestId: msg.requestId,
                       body: {
                         streamId,
-                        data: btoa('Hello World'),
+                        data: Uint8Array.from(Buffer.from('Hello World', 'utf8')),
                         done: true
                       },
                       role: MessageRole.SERVER

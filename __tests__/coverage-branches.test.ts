@@ -49,9 +49,14 @@ describe('Coverage - branch focused tests', () => {
       }
     });
 
-    it('should enable trace mode and register debug interceptors', () => {
+    it('should enable trace mode and register debug interceptors', async () => {
       const client = requestIframeClient(window as any, { trace: true } as any);
       expect(client).toBeDefined();
+      // debug module is lazy-loaded via dynamic import
+      for (let i = 0; i < 20; i++) {
+        if ((setupClientDebugInterceptors as unknown as jest.Mock).mock.calls.length > 0) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
       expect(setupClientDebugInterceptors).toHaveBeenCalledTimes(1);
     });
   });
@@ -63,9 +68,14 @@ describe('Coverage - branch focused tests', () => {
       expect(s1).toBe(s2);
     });
 
-    it('should enable trace mode and register server debug listeners', () => {
+    it('should enable trace mode and register server debug listeners', async () => {
       const s = requestIframeServer({ id: 'server-trace', trace: true } as any);
       expect(s).toBeDefined();
+      // debug module is lazy-loaded via dynamic import
+      for (let i = 0; i < 20; i++) {
+        if ((setupServerDebugListeners as unknown as jest.Mock).mock.calls.length > 0) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
       expect(setupServerDebugListeners).toHaveBeenCalledTimes(1);
     });
   });
@@ -167,7 +177,9 @@ describe('Coverage - branch focused tests', () => {
       });
       const ab = new Uint8Array([1, 2, 3]).buffer;
       expect((ws as any).encodeData(ab)).toBeDefined();
-      expect((ws as any).encodeData(123)).toBe('123');
+      const encoded = (ws as any).encodeData(123);
+      expect(encoded).toBeInstanceOf(Uint8Array);
+      expect(Array.from(encoded)).toEqual(Array.from(Uint8Array.from(Buffer.from('123', 'utf8'))));
     });
 
     it('IframeFileReadableStream.decodeData should handle ArrayBuffer and unknown types', async () => {

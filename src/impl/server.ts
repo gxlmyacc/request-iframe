@@ -24,18 +24,16 @@ import {
   HttpStatus,
   HttpStatusText,
   Messages,
+  formatMessage,
   DefaultTimeout,
   ProtocolVersion,
-  formatMessage,
   MessageRole,
-  StreamType as StreamTypeConstant,
-  WarnOnceKey,
-  buildWarnOnceKey
+  StreamType as StreamTypeConstant
 } from '../constants';
 import { isPromise } from '../utils/promise';
 import { isFunction } from '../utils/is';
 import { StreamMessageData } from '../stream';
-import { requestIframeLog } from '../utils/logger';
+import { warnServerIgnoredMessageWhenClosedOnce } from '../utils/warnings';
 
 /**
  * Middleware item (contains path matcher and middleware function)
@@ -111,9 +109,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
         handledBy: this.id,
         isOriginAllowed: (d, ctx) => this.isOriginAllowed(d, ctx),
         warnMissingPendingWhenClosed: (d) => {
-          this.hub.warnOnce(buildWarnOnceKey(WarnOnceKey.SERVER_MISSING_PENDING_WHEN_CLOSED, d.type, d.requestId), () => {
-            requestIframeLog('warn', formatMessage(Messages.SERVER_IGNORED_MESSAGE_WHEN_CLOSED, d.type, d.requestId));
-          });
+          warnServerIgnoredMessageWhenClosedOnce(this.hub, { type: d.type, requestId: d.requestId });
         }
       },
       originValidator: {
@@ -130,9 +126,7 @@ export class RequestIframeServerImpl implements RequestIframeServer {
     this.maxConcurrentRequestsPerClient = options?.maxConcurrentRequestsPerClient ?? Number.POSITIVE_INFINITY;
 
     const warnMissingPendingWhenClosed = (d: PostMessageData) => {
-      this.hub.warnOnce(buildWarnOnceKey(WarnOnceKey.SERVER_MISSING_PENDING_WHEN_CLOSED, d.type, d.requestId), () => {
-        requestIframeLog('warn', formatMessage(Messages.SERVER_IGNORED_MESSAGE_WHEN_CLOSED, d.type, d.requestId));
-      });
+      warnServerIgnoredMessageWhenClosedOnce(this.hub, { type: d.type, requestId: d.requestId });
     };
 
     const handlerOptions = this.hub.createHandlerOptions(this.handleVersionError.bind(this));

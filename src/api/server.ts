@@ -1,9 +1,10 @@
 import { RequestIframeServer, RequestIframeServerOptions } from '../types';
 import { RequestIframeServerImpl } from '../impl/server';
-import { setupServerDebugListeners } from '../utils/debug';
 import { setRequestIframeLogLevel } from '../utils/logger';
 import { getCachedServer, cacheServer, clearServerCache } from '../utils/cache';
 import { LogLevel } from '../constants';
+import { loadDebugModule } from '../utils/debug-lazy';
+import { applyStrictServerSecurityDefaults } from '../utils/strict-mode';
 
 /**
  * Create a server (for receiving and handling requests)
@@ -17,9 +18,10 @@ import { LogLevel } from '../constants';
 export function requestIframeServer(
   options?: RequestIframeServerOptions
 ): RequestIframeServer {
+  const resolvedOptions = applyStrictServerSecurityDefaults(options) ?? options;
   // Determine secretKey and id
-  const secretKey = options?.secretKey;
-  const id = options?.id;
+  const secretKey = resolvedOptions?.secretKey;
+  const id = resolvedOptions?.id;
   
   // If id is specified, check cache first
   if (id) {
@@ -33,13 +35,13 @@ export function requestIframeServer(
   const server = new RequestIframeServerImpl({
     secretKey,
     id,
-    ackTimeout: options?.ackTimeout,
-    autoOpen: options?.autoOpen,
-    allowedOrigins: options?.allowedOrigins,
-    validateOrigin: options?.validateOrigin,
-    maxConcurrentRequestsPerClient: options?.maxConcurrentRequestsPerClient,
-    autoAckMaxMetaLength: options?.autoAckMaxMetaLength,
-    autoAckMaxIdLength: options?.autoAckMaxIdLength
+    ackTimeout: resolvedOptions?.ackTimeout,
+    autoOpen: resolvedOptions?.autoOpen,
+    allowedOrigins: resolvedOptions?.allowedOrigins,
+    validateOrigin: resolvedOptions?.validateOrigin,
+    maxConcurrentRequestsPerClient: resolvedOptions?.maxConcurrentRequestsPerClient,
+    autoAckMaxMetaLength: resolvedOptions?.autoAckMaxMetaLength,
+    autoAckMaxIdLength: resolvedOptions?.autoAckMaxIdLength
   });
 
   /**
@@ -47,11 +49,19 @@ export function requestIframeServer(
    * - default: only warn/error will be printed (logger default)
    * - if trace enabled: raise log level and (optionally) enable detailed debug listeners
    */
-  if (options?.trace) {
-    const level = options.trace === true ? LogLevel.TRACE : options.trace;
+  if (resolvedOptions?.trace) {
+    const level = resolvedOptions.trace === true ? LogLevel.TRACE : resolvedOptions.trace;
     setRequestIframeLogLevel(level);
     if (level === LogLevel.TRACE || level === LogLevel.INFO) {
-      setupServerDebugListeners(server);
+      /**
+       * Lazy-load debug hooks to keep main bundle smaller.
+       * Best-effort: ignore dynamic import errors.
+       */
+      void loadDebugModule()
+        .then((m) => m.setupServerDebugListeners(server))
+        .catch(() => {
+          /** ignore */
+        });
     }
   }
 

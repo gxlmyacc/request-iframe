@@ -82,6 +82,64 @@ describe('requestIframe - sendFile', () => {
       cleanupIframe(iframe);
     });
 
+    it('should support chunked file sending with chunkSize', async () => {
+      const origin = 'https://example.com';
+      const iframe = createTestIframe(origin);
+
+      const mockContentWindow: any = {
+        postMessage: jest.fn((msg: PostMessageData) => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: msg,
+              origin,
+              source: mockContentWindow as any
+            })
+          );
+        })
+      };
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        writable: true
+      });
+
+      const client = requestIframeClient(iframe);
+      const server = requestIframeServer();
+
+      server.on('getFileChunked', async (_req, res) => {
+        // Ensure content is larger than chunkSize so we get multiple stream_data frames
+        const fileContent = 'Hello World'; // 11 bytes in UTF-8 for ASCII
+        await res.sendFile(fileContent, {
+          mimeType: 'text/plain',
+          fileName: 'chunked.txt',
+          chunked: true,
+          chunkSize: 4
+        });
+      });
+
+      const response = await client.send('getFileChunked', {});
+      expect((response as any).data).toBeDefined();
+
+      const allCalls = mockContentWindow.postMessage.mock.calls;
+      const streamStartCall = allCalls.find((call: any[]) => call[0]?.type === 'stream_start');
+      expect(streamStartCall).toBeDefined();
+
+      const streamBody = streamStartCall![0].body;
+      expect(streamBody.type).toBe('file');
+      expect(streamBody.chunked).toBe(true);
+      expect(streamBody.metadata?.filename).toBe('chunked.txt');
+
+      const streamDataCalls = allCalls.filter((call: any[]) => call[0]?.type === 'stream_data');
+      // With chunkSize=4, "Hello World" should result in multiple chunks
+      expect(streamDataCalls.length).toBeGreaterThan(1);
+
+      const streamEndCall = allCalls.find((call: any[]) => call[0]?.type === 'stream_end');
+      expect(streamEndCall).toBeDefined();
+
+      client.destroy();
+      server.destroy();
+      cleanupIframe(iframe);
+    });
+
     it('should support sending Blob file', async () => {
       const origin = 'https://example.com';
       const iframe = createTestIframe(origin);
@@ -241,7 +299,7 @@ describe('requestIframe - sendFile', () => {
             // Then send stream_start
             setTimeout(() => {
               const streamId = 'stream-test';
-              const fileContent = btoa('Hello World');
+              const fileContent = Uint8Array.from(Buffer.from('Hello World', 'utf8'));
 
               // Send stream_start
               window.dispatchEvent(

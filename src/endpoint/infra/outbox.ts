@@ -1,8 +1,7 @@
 import type { PostMessageData } from '../../types';
 import { MessageDispatcher } from '../../message';
 import type { IIframeWritableStream, StreamBindContext, StreamMessageData } from '../../stream/types';
-import { isIframeWritableStream } from '../../stream';
-import { createIframeFileWritableStreamFromContent } from '../stream/file-writable';
+import { IframeFileWritableStream, isIframeWritableStream } from '../../stream';
 import { SyncHook } from '../../utils/hooks';
 
 type MaybePromise<T> = T | Promise<T>;
@@ -57,6 +56,8 @@ export interface RequestIframeOutboxSendFileParams<TResult> extends RequestIfram
   fileName?: string;
   mimeType?: string;
   chunked?: boolean;
+  /** Chunk size in bytes (only used when chunked is true). */
+  chunkSize?: number;
   autoResolve?: boolean;
   defaultFileName?: string;
   defaultMimeType?: string;
@@ -265,21 +266,22 @@ export class RequestIframeEndpointOutbox {
    */
   public async sendFile<TResult>(params: RequestIframeOutboxSendFileParams<TResult>): Promise<TResult> {
     return this.runWithHooks(params, async () => {
-      const created = await createIframeFileWritableStreamFromContent({
+      const stream = await IframeFileWritableStream.from({
         content: params.content,
         fileName: params.fileName,
         mimeType: params.mimeType,
         chunked: params.chunked,
+        chunkSize: params.chunkSize,
         autoResolve: params.autoResolve,
         defaultFileName: params.defaultFileName,
         defaultMimeType: params.defaultMimeType
       });
 
-      await params.onFileInfo?.({ fileName: created.fileName, mimeType: created.mimeType });
+      await params.onFileInfo?.({ fileName: stream.filename, mimeType: stream.mimeType });
 
       return await this.runStreamSend({
         ...(params.stream as any),
-        stream: created.stream as any
+        stream: stream as any
       });
     });
   }

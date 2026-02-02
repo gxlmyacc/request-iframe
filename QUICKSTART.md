@@ -29,15 +29,24 @@ Suppose you have a parent page that needs to communicate with an embedded iframe
 ## Step 1: Create Client in Parent Page
 
 ```typescript
-// parent.html
+/** parent.html */
 import { requestIframeClient } from 'request-iframe';
 
-// Get iframe element
+/** Get iframe element */
 const iframe = document.getElementById('my-iframe') as HTMLIFrameElement;
 
-// Create client (for sending requests)
+/** Prefer waiting iframe load so contentWindow is ready */
+await new Promise<void>((resolve) => iframe.addEventListener('load', () => resolve(), { once: true }));
+
+/** Create client (for sending requests) */
 const client = requestIframeClient(iframe, { 
-  secretKey: 'my-app'  // Message isolation identifier, must match iframe
+  secretKey: 'my-app',  /** Message isolation identifier, must match iframe */
+  /**
+   * strict: true defaults targetOrigin/allowedOrigins to window.location.origin (same-origin only)
+   * - Works for same-origin iframes
+   * - **Note: strict is NOT a cross-origin security configuration**; for cross-origin, explicitly configure targetOrigin + allowedOrigins/validateOrigin
+   */
+  strict: true
 });
 
 // Send request and wait for response
@@ -54,12 +63,18 @@ console.log(user); // { name: 'Tom', age: 18 }
 ## Step 2: Create Server in iframe
 
 ```typescript
-// child.html (inside iframe)
+/** child.html (inside iframe) */
 import { requestIframeServer } from 'request-iframe';
 
-// Create server (for receiving requests)
+/**
+ * Create server (for receiving requests)
+ * - Strongly recommended to configure allowedOrigins / validateOrigin in production
+ * - This snippet assumes a same-origin demo (parent origin === iframe origin)
+ *   For cross-origin, replace with the real parent origin (e.g. 'https://parent.example.com')
+ */
 const server = requestIframeServer({ 
-  secretKey: 'my-app'  // Must match parent page's client!
+  secretKey: 'my-app',  /** Must match parent page's client! */
+  strict: true
 });
 
 // Register request handler
@@ -224,11 +239,13 @@ import { LogLevel } from 'request-iframe';
 
 const client = requestIframeClient(iframe, { 
   secretKey: 'my-app',
+  /** Recommended: configure targetOrigin/allowedOrigins (see Step 1) */
   trace: LogLevel.INFO  // Enable info/warn/error logs (or use true for TRACE)
 });
 
 const server = requestIframeServer({ 
   secretKey: 'my-app',
+  /** Recommended: configure allowedOrigins/validateOrigin (see Step 2) */
   trace: true
 });
 ```
@@ -254,12 +271,17 @@ Check the following:
 ### Q: How to send requests from iframe to parent page?
 
 ```typescript
-// Inside iframe
-const client = requestIframeClient(window.parent, { secretKey: 'reverse' });
+/**
+ * Inside iframe
+ * - For Window targets, always set a strict targetOrigin and allowlist it.
+ */
+const parentOrigin = 'https://parent.example.com';
+const client = requestIframeClient(window.parent, { secretKey: 'reverse', targetOrigin: parentOrigin, allowedOrigins: [parentOrigin] });
 await client.send('/notify', { event: 'ready' });
 
-// Parent page
-const server = requestIframeServer({ secretKey: 'reverse' });
+/** Parent page (allowedOrigins should be the iframe origin) */
+const iframeOrigin = 'https://child.example.com';
+const server = requestIframeServer({ secretKey: 'reverse', allowedOrigins: [iframeOrigin] });
 server.on('/notify', (req, res) => {
   console.log('iframe is ready');
   res.send({ ok: true });

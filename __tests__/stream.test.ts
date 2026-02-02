@@ -670,7 +670,7 @@ describe('Stream', () => {
       expect(stream.mimeType).toBe('text/plain');
     });
 
-    it('should decode base64 data', async () => {
+    it('should decode binary data', async () => {
       const stream = new IframeFileReadableStream(
         'test-stream-id',
         'test-request-id',
@@ -679,10 +679,9 @@ describe('Stream', () => {
 
       const handler = registeredHandlers.get('test-stream-id');
       
-      // Send base64 encoded data
       const testData = 'Hello, World!';
-      const base64Data = btoa(testData);
-      handler!({ type: 'data', streamId: 'test-stream-id', data: base64Data, done: true });
+      const bytes = Uint8Array.from(Buffer.from(testData, 'utf8'));
+      handler!({ type: 'data', streamId: 'test-stream-id', data: bytes, done: true });
 
       const result = await stream.read();
       expect(result).toBeInstanceOf(Uint8Array);
@@ -704,8 +703,8 @@ describe('Stream', () => {
       );
 
       const handler = registeredHandlers.get('test-stream-id');
-      const base64Data = btoa('test');
-      handler!({ type: 'data', streamId: 'test-stream-id', data: base64Data, done: true });
+      const bytes = Uint8Array.from(Buffer.from('test', 'utf8'));
+      handler!({ type: 'data', streamId: 'test-stream-id', data: bytes, done: true });
 
       const blob = await stream.readAsBlob();
       expect(blob).toBeInstanceOf(Blob);
@@ -720,8 +719,8 @@ describe('Stream', () => {
       );
 
       const handler = registeredHandlers.get('test-stream-id');
-      const base64Data = btoa('test');
-      handler!({ type: 'data', streamId: 'test-stream-id', data: base64Data, done: true });
+      const bytes = Uint8Array.from(Buffer.from('test', 'utf8'));
+      handler!({ type: 'data', streamId: 'test-stream-id', data: bytes, done: true });
 
       const buffer = await stream.readAsArrayBuffer();
       expect(buffer).toBeInstanceOf(ArrayBuffer);
@@ -736,11 +735,31 @@ describe('Stream', () => {
       );
 
       const handler = registeredHandlers.get('test-stream-id');
-      const base64Data = btoa('test');
-      handler!({ type: 'data', streamId: 'test-stream-id', data: base64Data, done: true });
+      const bytes = Uint8Array.from(Buffer.from('test', 'utf8'));
+      handler!({ type: 'data', streamId: 'test-stream-id', data: bytes, done: true });
 
       const dataUrl = await stream.readAsDataURL();
       expect(dataUrl).toMatch(/^data:text\/plain;base64,/);
+    });
+
+    it('should read as Text (utf-8)', async () => {
+      const g: any = globalThis as any;
+      const originalTextDecoder = g.TextDecoder;
+      g.TextDecoder = undefined;
+      try {
+        const stream = new IframeFileReadableStream('test-stream-id', 'test-request-id', mockHandler, {
+          mimeType: 'text/plain'
+        });
+        const handler = registeredHandlers.get('test-stream-id');
+        const text = '你好, world!';
+        const bytes = Uint8Array.from(Buffer.from(text, 'utf8'));
+        handler!({ type: 'data', streamId: 'test-stream-id', data: bytes, done: true });
+
+        const result = await stream.readAsText();
+        expect(result).toBe(text);
+      } finally {
+        g.TextDecoder = originalTextDecoder;
+      }
     });
   });
 
@@ -780,7 +799,7 @@ describe('Stream', () => {
       const stream = new IframeFileWritableStream({
         filename: 'test.txt',
         mimeType: 'text/plain',
-        next: async () => ({ data: btoa('test'), done: true })
+        next: async () => ({ data: new Uint8Array([1, 2, 3]), done: true })
       });
       expect(isIframeFileWritableStream(stream)).toBe(true);
     });

@@ -310,6 +310,21 @@ export interface SendFileOptions extends SendOptions {
   mimeType?: string;
   /** File name */
   fileName?: string;
+  /**
+   * Whether to send file in multiple chunks.
+   * Default: false (backward compatible).
+   */
+  chunked?: boolean;
+  /**
+   * Chunk size in bytes (only used when chunked is true).
+   */
+  chunkSize?: number;
+  /**
+   * Whether receiver should auto-resolve the file stream to File/Blob.
+   * - true (default): client will read the entire file stream and return File/Blob in response.data
+   * - false: client will receive response.stream and can consume it progressively
+   */
+  autoResolve?: boolean;
 }
 
 /**
@@ -439,7 +454,7 @@ export interface RequestIframeClient {
   sendFile<T = any>(
     path: string,
     content: string | Blob | File,
-    options?: RequestOptions & { mimeType?: string; fileName?: string; autoResolve?: boolean }
+    options?: RequestOptions & { mimeType?: string; fileName?: string; autoResolve?: boolean; chunked?: boolean; chunkSize?: number }
   ): Promise<Response<T> | T>;
   /** Send stream as request body (server receives readable stream) */
   sendStream<T = any>(
@@ -550,6 +565,18 @@ export interface RequestIframeClientOptions extends RequestDefaults {
    */
   validateOrigin?: OriginValidator;
   /**
+   * Strict mode (recommended for same-origin defaults).
+   *
+   * When enabled and user did not configure origin constraints explicitly:
+   * - targetOrigin defaults to window.location.origin (same-origin only)
+   * - allowedOrigins defaults to [window.location.origin]
+   *
+   * This reduces boilerplate and avoids unsafe defaults like Window targetOrigin='*'.
+   *
+   * Note: For cross-origin usage, you should explicitly set targetOrigin and allowedOrigins/validateOrigin.
+   */
+  strict?: boolean;
+  /**
    * Whether to enable trace mode.
    * If true, logs will be printed at various points such as before and after requests.
    */
@@ -608,6 +635,15 @@ export interface RequestIframeServerOptions extends Pick<RequestDefaults, 'ackTi
    * Return false to ignore the message.
    */
   validateOrigin?: OriginValidator;
+  /**
+   * Strict mode (recommended for same-origin defaults).
+   *
+   * When enabled and user did not configure origin constraints explicitly:
+   * - allowedOrigins defaults to [window.location.origin]
+   *
+   * Note: For cross-origin usage, you should explicitly set allowedOrigins/validateOrigin.
+   */
+  strict?: boolean;
   /**
    * Whether to automatically open (start message handling) when creating the server.
    * Default is true. If set to false, you need to manually call server.open() to start message handling.

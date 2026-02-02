@@ -12,3 +12,20 @@ export function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+/**
+ * Convert Blob to ArrayBuffer.
+ *
+ * Notes:
+ * - Use FileReader for legacy browser support (e.g. Chrome 49).
+ */
+export function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      resolve(reader.result as ArrayBuffer);
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+}
+

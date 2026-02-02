@@ -334,6 +334,8 @@ export interface IIframeFileReadableStream extends IIframeReadableStream<Uint8Ar
   readonly size?: number;
   /** Read as Blob */
   readAsBlob(): Promise<Blob>;
+  /** Read as UTF-8 text */
+  readAsText(): Promise<string>;
   /** Read as File */
   readAsFile(fileName?: string): Promise<File>;
   /** Read as ArrayBuffer */

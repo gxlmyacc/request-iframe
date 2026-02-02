@@ -10,9 +10,11 @@ import { generateInstanceId } from '../utils/id';
 import { isWindowAvailable } from '../utils/window';
 import { RequestIframeClientImpl } from '../impl/client';
 import { RequestIframeServerImpl } from '../impl/server';
-import { setupClientDebugInterceptors, setupServerDebugListeners } from '../utils/debug';
 import { setRequestIframeLogLevel } from '../utils/logger';
 import { Messages, ErrorCode, OriginConstant, LogLevel } from '../constants';
+import { warnUnsafeTargetOriginForWindow } from '../utils/warnings';
+import { ensureClientDebugInterceptors, loadDebugModule, wrapClientMethodsForDebug } from '../utils/debug-lazy';
+import { applyStrictClientSecurityDefaults, applyStrictServerSecurityDefaults } from '../utils/strict-mode';
 
 /**
  * Endpoint facade type (client + server).
@@ -76,7 +78,11 @@ class RequestIframeEndpointApiFacade implements RequestIframeEndpoint {
         const level = options.trace === true ? LogLevel.TRACE : options.trace;
         setRequestIframeLogLevel(level);
         if (level === LogLevel.TRACE || level === LogLevel.INFO) {
-          setupClientDebugInterceptors(client);
+          wrapClientMethodsForDebug(client);
+          void loadDebugModule().catch(() => {
+            /** ignore */
+          });
+          void ensureClientDebugInterceptors(client);
         }
       }
 
@@ -115,7 +121,11 @@ class RequestIframeEndpointApiFacade implements RequestIframeEndpoint {
         const level = options.trace === true ? LogLevel.TRACE : options.trace;
         setRequestIframeLogLevel(level);
         if (level === LogLevel.TRACE || level === LogLevel.INFO) {
-          setupServerDebugListeners(server);
+          void loadDebugModule()
+            .then((m) => m.setupServerDebugListeners(server))
+            .catch(() => {
+              /** ignore */
+            });
         }
       }
 
@@ -229,12 +239,12 @@ export function requestIframeEndpoint(
   options?: RequestIframeEndpointOptions
 ): RequestIframeEndpoint {
   let targetWindow: Window | null = null;
-  let targetOrigin: string = OriginConstant.ANY;
+  let defaultTargetOrigin: string = OriginConstant.ANY;
 
   if ((target as HTMLIFrameElement).tagName === 'IFRAME') {
     const iframe = target as HTMLIFrameElement;
     targetWindow = iframe.contentWindow;
-    targetOrigin = getIframeTargetOrigin(iframe);
+    defaultTargetOrigin = getIframeTargetOrigin(iframe);
     if (!targetWindow) {
       throw {
         message: Messages.IFRAME_NOT_READY,
@@ -243,24 +253,34 @@ export function requestIframeEndpoint(
     }
   } else {
     targetWindow = target as Window;
-    targetOrigin = OriginConstant.ANY;
+    defaultTargetOrigin = OriginConstant.ANY;
   }
 
-  /** Allow user to override targetOrigin explicitly */
-  if (options?.targetOrigin) {
-    targetOrigin = options.targetOrigin;
-  }
+  const resolvedClient = applyStrictClientSecurityDefaults(defaultTargetOrigin, options);
+  const targetOrigin = resolvedClient.targetOrigin;
+  const resolvedOptions = applyStrictServerSecurityDefaults(resolvedClient.options ?? options) ?? (resolvedClient.options ?? options);
+
+  /**
+   * P1: warn on unsafe default targetOrigin for Window targets.
+   * Endpoint facade is lazy (client/server created later), so warn here.
+   */
+  warnUnsafeTargetOriginForWindow({
+    isIframeTarget: (target as any).tagName === 'IFRAME',
+    targetOrigin,
+    allowedOrigins: resolvedOptions?.allowedOrigins,
+    validateOrigin: resolvedOptions?.validateOrigin
+  });
 
   /**
    * Endpoint uses ONE shared id by default, so it behaves like a single endpoint.
    * If options.id is provided, it becomes the shared id for both client+server.
    */
-  const endpointId = options?.id ?? generateInstanceId();
+  const endpointId = resolvedOptions?.id ?? generateInstanceId();
 
   return new RequestIframeEndpointApiFacade({
     targetWindow,
     targetOrigin,
-    options,
+    options: resolvedOptions,
     endpointId
   });
 }

@@ -125,13 +125,20 @@ Example (using unpkg):
 ```typescript
 import { requestIframeClient } from 'request-iframe';
 
-// Get iframe element
-const iframe = document.querySelector('iframe')!;
+/** Get iframe element */
+const iframe = document.querySelector('iframe') as HTMLIFrameElement;
 
-// Create client
-const client = requestIframeClient(iframe, { secretKey: 'my-app' });
+/** Prefer waiting iframe load so contentWindow is ready */
+await new Promise<void>((resolve) => iframe.addEventListener('load', () => resolve(), { once: true }));
 
-// Send request (just like axios)
+/**
+ * Create client (safer + less boilerplate default)
+ * - strict: true defaults targetOrigin/allowedOrigins to window.location.origin (same-origin only)
+ * - For cross-origin, explicitly configure targetOrigin + allowedOrigins/validateOrigin
+ */
+const client = requestIframeClient(iframe, { secretKey: 'my-app', strict: true });
+
+/** Send request (just like axios) */
 const response = await client.send('/api/getUserInfo', { userId: 123 });
 console.log(response.data); // { name: 'Tom', age: 18 }
 ```
@@ -141,10 +148,15 @@ console.log(response.data); // { name: 'Tom', age: 18 }
 ```typescript
 import { requestIframeServer } from 'request-iframe';
 
-// Create server
-const server = requestIframeServer({ secretKey: 'my-app' });
+/**
+ * Create server
+ * - Strongly recommended to configure allowedOrigins / validateOrigin in production
+ * - This snippet assumes a same-origin demo (parent origin === iframe origin)
+ *   For cross-origin, replace with the real parent origin (e.g. 'https://parent.example.com')
+ */
+const server = requestIframeServer({ secretKey: 'my-app', strict: true });
 
-// Register handler (just like express)
+/** Register handler (just like express) */
 server.on('/api/getUserInfo', (req, res) => {
   const { userId } = req.body;
   res.send({ name: 'Tom', age: 18 });
@@ -169,8 +181,8 @@ That's it! 🎉
 In micro-frontend architecture, the main application needs to communicate with child application iframes:
 
 ```typescript
-// Main application (parent page)
-const client = requestIframeClient(iframe, { secretKey: 'main-app' });
+/** Main application (parent page, same-origin default: strict: true) */
+const client = requestIframeClient(iframe, { secretKey: 'main-app', strict: true });
 
 // Get user info from child application
 const userInfoResponse = await client.send('/api/user/info', {});
@@ -185,8 +197,8 @@ await client.send('/api/data/refresh', { timestamp: Date.now() });
 When integrating third-party components, isolate via iframe while maintaining communication:
 
 ```typescript
-// Parent page
-const client = requestIframeClient(thirdPartyIframe, { secretKey: 'widget' });
+/** Parent page (same-origin default: strict: true) */
+const client = requestIframeClient(thirdPartyIframe, { secretKey: 'widget', strict: true });
 
 // Configure component
 await client.send('/config', {
@@ -194,13 +206,15 @@ await client.send('/config', {
   language: 'en-US'
 });
 
-// Listen to component events (via reverse communication)
-const server = requestIframeServer({ secretKey: 'widget' });
+/** Listen to component events (via reverse communication) */
+const server = requestIframeServer({ secretKey: 'widget', strict: true });
 server.on('/event', (req, res) => {
   console.log('Component event:', req.body);
   res.send({ received: true });
 });
 ```
+
+> If the third-party iframe is **cross-origin**, explicitly configure `targetOrigin` and `allowedOrigins/validateOrigin` (see the security section).
 
 ### Popup / New Window (Window Communication)
 
@@ -209,19 +223,25 @@ server.on('/event', (req, res) => {
 **Important**: you must have a real `Window` reference (e.g. returned by `window.open()`, or available via `window.opener` / `event.source`). You cannot send to an arbitrary browser tab by URL.
 
 ```typescript
-// Parent page: open a new tab/window
+/** Parent page: open a new tab/window */
 const child = window.open('https://child.example.com/page.html', '_blank');
 if (!child) throw new Error('Popup blocked');
 
-// Parent -> child
+/** Parent -> child */
+const targetOrigin = 'https://child.example.com';
 const client = requestIframeClient(child, {
   secretKey: 'popup-demo',
-  targetOrigin: 'https://child.example.com' // strongly recommended (avoid '*')
+  targetOrigin, // strongly recommended (avoid '*')
+  allowedOrigins: [targetOrigin]
 });
 await client.send('/api/ping', { from: 'parent' });
 
-// Child page: create server
-const server = requestIframeServer({ secretKey: 'popup-demo' });
+/**
+ * Child page: create server
+ * Note: allowedOrigins should be the real parent origin (example value below).
+ */
+const parentOrigin = 'https://parent.example.com';
+const server = requestIframeServer({ secretKey: 'popup-demo', allowedOrigins: [parentOrigin] });
 server.on('/api/ping', (req, res) => res.send({ ok: true, echo: req.body }));
 ```
 
@@ -230,8 +250,12 @@ server.on('/api/ping', (req, res) => res.send({ ok: true, echo: req.body }));
 When iframe and parent page are on different origins, use request-iframe to securely fetch data:
 
 ```typescript
-// Inside iframe (different origin)
-const server = requestIframeServer({ secretKey: 'data-api' });
+/**
+ * Inside iframe (different origin)
+ * Note: allowedOrigins should be the real parent origin (example value below).
+ */
+const parentOrigin = 'https://parent.example.com';
+const server = requestIframeServer({ secretKey: 'data-api', allowedOrigins: [parentOrigin] });
 
 server.on('/api/data', async (req, res) => {
   // Fetch data from same-origin API (iframe can access same-origin resources)
@@ -239,8 +263,9 @@ server.on('/api/data', async (req, res) => {
   res.send(data);
 });
 
-// Parent page (cross-origin)
-const client = requestIframeClient(iframe, { secretKey: 'data-api' });
+/** Parent page (cross-origin) */
+const targetOrigin = new URL(iframe.src).origin;
+const client = requestIframeClient(iframe, { secretKey: 'data-api', targetOrigin, allowedOrigins: [targetOrigin] });
 const response = await client.send('/api/data', {});
 const data = response.data; // Successfully fetch cross-origin data
 ```
@@ -740,6 +765,17 @@ import {
   isIframeFileReadableStream 
 } from 'request-iframe';
 
+/**
+ * How to choose (data stream vs file/byte stream)
+ *
+ * - IframeWritableStream / IframeReadableStream:
+ *   For application-level data (objects/strings), relies on structured clone.
+ * - IframeFileWritableStream / IframeFileReadableStream:
+ *   For byte sequences (files/binary/UTF-8 text files). Chunks represent bytes.
+ *   - Text file recommended: IframeFileWritableStream.fromText(...) + fileStream.readAsText()
+ *   - Binary recommended: yield Uint8Array/ArrayBuffer (transferables when possible)
+ */
+
 // Server side: Send data stream using iterator
 server.on('/api/stream', async (req, res) => {
   const stream = new IframeWritableStream({
@@ -759,6 +795,19 @@ server.on('/api/stream', async (req, res) => {
     }
   });
   
+  await res.sendStream(stream);
+});
+
+// Server side: Option 2 (recommended) - create a file stream from Blob/File via from()
+server.on('/api/fileStream2', async (req, res) => {
+  const blob = new Blob([/* file bytes */], { type: 'application/octet-stream' });
+  const stream = await IframeFileWritableStream.from({
+    content: blob,
+    fileName: 'large-file.bin',
+    mimeType: 'application/octet-stream',
+    chunked: true,
+    chunkSize: 256 * 1024
+  });
   await res.sendStream(stream);
 });
 
@@ -792,6 +841,28 @@ if (isIframeReadableStream(response.stream)) {
   
   // Cancel stream
   response.stream.cancel('User cancelled');
+}
+```
+
+#### Text file convenience
+
+```typescript
+// Server side: send a UTF-8 text file
+server.on('/api/textFile', async (req, res) => {
+  const stream = await IframeFileWritableStream.fromText({
+    text: 'hello',
+    fileName: 'hello.txt',
+    chunked: true,
+    chunkSize: 64 * 1024
+  });
+  await res.sendStream(stream);
+});
+
+// Client side: read as UTF-8 text
+const resp = await client.send('/api/textFile', {});
+if (isIframeFileReadableStream(resp.stream)) {
+  const text = await resp.stream.readAsText();
+  console.log(text);
 }
 ```
 
@@ -849,11 +920,11 @@ server.on('/api/uploadStream', async (req, res) => {
 | Type | Description |
 |------|-------------|
 | `IframeWritableStream` | Writer/producer stream: **created by whichever side is sending the stream** (server→client response stream, or client→server request stream) |
-| `IframeFileWritableStream` | File writer/producer stream (base64-encodes internally) |
+| `IframeFileWritableStream` | File writer/producer stream (supports `Uint8Array`/`ArrayBuffer` chunks; uses transferables when possible) |
 | `IframeReadableStream` | Reader/consumer stream for receiving regular data (regardless of which side sent it) |
-| `IframeFileReadableStream` | File reader/consumer stream (base64-decodes internally) |
+| `IframeFileReadableStream` | File reader/consumer stream (supports binary chunks) |
 
-> **Note**: File streams are base64-encoded internally. Base64 introduces ~33% size overhead and can be memory/CPU heavy for very large files. For large files, prefer **chunked** file streams (`chunked: true`) and keep chunk sizes moderate (e.g. 256KB–1MB).
+> **Note**: File stream chunks represent **bytes**. This version transfers file chunks as binary (`ArrayBuffer`/`Uint8Array`) and will use transferables when possible to reduce copying. If you manually yield a `string` chunk, it will be encoded into bytes using **UTF-8**; for binary data, yield `Uint8Array/ArrayBuffer` directly. For large files, prefer **chunked** file streams (`chunked: true`) and keep chunk sizes moderate (e.g. 256KB–1MB).
 
 **Stream timeouts:**
 - `options.streamTimeout` (request option): client-side stream idle timeout while consuming `response.stream` (data/file streams). When triggered, the client performs a heartbeat check (by default `client.isConnect()`); if not alive, the stream fails as disconnected.
@@ -964,6 +1035,7 @@ Create a Client instance.
 | `target` | `HTMLIFrameElement \| Window` | Target iframe element or window object |
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
 | `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | Trace/log level (optional). Default logs are warn/error only |
+| `options.strict` | `boolean` | Strict mode (recommended for same-origin defaults). If you did not explicitly configure `targetOrigin/allowedOrigins/validateOrigin`, defaults are constrained to `window.location.origin` (same-origin only). **Note: strict is NOT a cross-origin security configuration**; for cross-origin you must explicitly set `targetOrigin` + `allowedOrigins/validateOrigin`. |
 | `options.targetOrigin` | `string` | Override postMessage targetOrigin for sending (optional). If `target` is a `Window`, default is `*`. |
 | `options.ackTimeout` | `number` | Global default ACK acknowledgment timeout (ms), default 1000 |
 | `options.timeout` | `number` | Global default request timeout (ms), default 5000 |
@@ -978,7 +1050,8 @@ Create a Client instance.
 **Notes about `target: Window`:**
 - **You must have a `Window` reference** (e.g. from `window.open()`, `window.opener`, or `MessageEvent.source`).
 - You **cannot** communicate with an arbitrary browser tab by URL.
-- For security, prefer setting a strict `targetOrigin` and configure `allowedOrigins` / `validateOrigin`.
+- For security, prefer setting a strict `targetOrigin` (avoid `*`) and configure `allowedOrigins` / `validateOrigin`.
+- `strict: true` only constrains defaults to the current origin (same-origin only); it does **not** automatically make a cross-origin setup secure.
 
 **Production configuration template:**
 
@@ -1049,6 +1122,7 @@ Create a Server instance.
 |-----------|------|-------------|
 | `options.secretKey` | `string` | Message isolation identifier (optional) |
 | `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | Trace/log level (optional). Default logs are warn/error only |
+| `options.strict` | `boolean` | Strict mode (recommended for same-origin defaults). If you did not explicitly configure `allowedOrigins/validateOrigin`, it defaults to `allowedOrigins: [window.location.origin]` (same-origin only). **Note: strict is NOT a cross-origin security configuration**; for cross-origin you must explicitly configure allowlists/validators. |
 | `options.ackTimeout` | `number` | Wait for client acknowledgment timeout (ms), default 1000 |
 | `options.maxConcurrentRequestsPerClient` | `number` | Max concurrent in-flight requests per client (per origin + creatorId). Default Infinity |
 | `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | Allowlist for incoming message origins (optional, recommended for production) |
@@ -1660,13 +1734,35 @@ try {
 `secretKey` is used for message isolation. When there are multiple iframes or multiple request-iframe instances on a page, using different `secretKey` values can prevent message cross-talk:
 
 ```typescript
-// Communication for iframe A
-const clientA = requestIframeClient(iframeA, { secretKey: 'app-a' });
-const serverA = requestIframeServer({ secretKey: 'app-a' });
+/**
+ * Communication for iframe A
+ * - Parent page should allowlist iframe A origin
+ * - Inside iframe A should allowlist parent origin
+ */
+const iframeASrc = iframeA.getAttribute('src');
+if (!iframeASrc) throw new Error('iframeA src is empty');
+const iframeAOrigin = new URL(iframeASrc, window.location.href).origin;
+const clientA = requestIframeClient(iframeA, {
+  secretKey: 'app-a',
+  targetOrigin: iframeAOrigin,
+  allowedOrigins: [iframeAOrigin]
+});
+const parentOrigin = 'https://parent.com';
+const serverA = requestIframeServer({ secretKey: 'app-a', allowedOrigins: [parentOrigin] });
 
-// Communication for iframe B
-const clientB = requestIframeClient(iframeB, { secretKey: 'app-b' });
-const serverB = requestIframeServer({ secretKey: 'app-b' });
+/**
+ * Communication for iframe B
+ * - Same pattern as iframe A
+ */
+const iframeBSrc = iframeB.getAttribute('src');
+if (!iframeBSrc) throw new Error('iframeB src is empty');
+const iframeBOrigin = new URL(iframeBSrc, window.location.href).origin;
+const clientB = requestIframeClient(iframeB, {
+  secretKey: 'app-b',
+  targetOrigin: iframeBOrigin,
+  allowedOrigins: [iframeBOrigin]
+});
+const serverB = requestIframeServer({ secretKey: 'app-b', allowedOrigins: [parentOrigin] });
 ```
 
 ### 2. Why is ACK acknowledgment needed?
@@ -1681,14 +1777,28 @@ ACK mechanism is similar to TCP handshake, used for:
 `postMessage` itself supports cross-origin communication, request-iframe handles it automatically:
 
 ```typescript
-// Parent page (https://parent.com)
-const client = requestIframeClient(iframe);
+/**
+ * Parent page (https://parent.com)
+ * - targetOrigin/allowedOrigins should be the iframe origin
+ */
+const iframeSrc = iframe.getAttribute('src');
+if (!iframeSrc) throw new Error('iframe src is empty');
+const childOrigin = new URL(iframeSrc, window.location.href).origin;
+const client = requestIframeClient(iframe, {
+  secretKey: 'my-app',
+  targetOrigin: childOrigin,
+  allowedOrigins: [childOrigin]
+});
 
-// Inside iframe (https://child.com)
-const server = requestIframeServer();
+/**
+ * Inside iframe (https://child.com)
+ * - allowedOrigins should be the real parent origin
+ */
+const parentOrigin = 'https://parent.com';
+const server = requestIframeServer({ secretKey: 'my-app', allowedOrigins: [parentOrigin] });
 ```
 
-Just ensure both sides use the same `secretKey`.
+Just ensure both sides use the same `secretKey`, and configure `targetOrigin` / `allowedOrigins` correctly.
 
 ### 4. Can Server actively push messages?
 
@@ -1699,9 +1809,17 @@ For bidirectional communication, you have 2 options:
 - Use `requestIframeEndpoint()` on both sides (recommended) so each side has **send + handle** in one object
 
 ```typescript
-// Inside iframe
-const server = requestIframeServer({ secretKey: 'my-app' });
-const client = requestIframeClient(window.parent, { secretKey: 'my-app-reverse' });
+/**
+ * Inside iframe
+ * - For Window targets, always set a strict targetOrigin and allowlist it.
+ */
+const parentOrigin = 'https://parent.com';
+const server = requestIframeServer({ secretKey: 'my-app', allowedOrigins: [parentOrigin] });
+const client = requestIframeClient(window.parent, {
+  secretKey: 'my-app-reverse',
+  targetOrigin: parentOrigin,
+  allowedOrigins: [parentOrigin]
+});
 
 // Actively send message to parent page
 await client.send('/notify', { event: 'data-changed' });

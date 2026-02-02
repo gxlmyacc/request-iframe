@@ -1,5 +1,6 @@
 import type { RequestIframeLogLevel } from '../types';
 import { LogLevel } from '../constants';
+import { warnOnce } from './warn-once';
 
 /**
  * Built-in leveled logger for request-iframe.
@@ -64,4 +65,37 @@ export function requestIframeLog(level: Exclude<RequestIframeLogLevel, 'silent'>
     (console as any)[method](`%c${prefix}%c ${message}`, prefixStyle, messageStyle);
   }
 }
+
+/**
+ * Unified logger facade.
+ *
+ * Notes:
+ * - This is a thin wrapper around existing functions (kept for backward compatibility).
+ * - `once()` is useful for configuration/security hints to avoid noisy logs.
+ */
+export const logger = {
+  getLevel: getRequestIframeLogLevel,
+  setLevel: setRequestIframeLogLevel,
+  ensureLevel: ensureRequestIframeLogLevel,
+
+  trace(message: string, data?: unknown): void {
+    requestIframeLog(LogLevel.TRACE, message, data);
+  },
+  info(message: string, data?: unknown): void {
+    requestIframeLog(LogLevel.INFO, message, data);
+  },
+  warn(message: string, data?: unknown): void {
+    requestIframeLog(LogLevel.WARN, message, data);
+  },
+  error(message: string, data?: unknown): void {
+    requestIframeLog(LogLevel.ERROR, message, data);
+  },
+
+  /**
+   * Log once by key (deduped across bundles/versions).
+   */
+  once(level: Exclude<RequestIframeLogLevel, 'silent'>, key: string, message: string, data?: unknown): void {
+    warnOnce(key, () => requestIframeLog(level, message, data));
+  }
+} as const;
 

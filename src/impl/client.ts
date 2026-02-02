@@ -365,7 +365,7 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
   public async sendFile<T = any>(
     path: string,
     content: string | Blob | File,
-    options?: RequestOptions & { mimeType?: string; fileName?: string; autoResolve?: boolean }
+    options?: RequestOptions & { mimeType?: string; fileName?: string; autoResolve?: boolean; chunked?: boolean; chunkSize?: number }
   ): Promise<Response<T> | T> {
     const config: RequestConfig = {
       path,
@@ -391,7 +391,8 @@ export class RequestIframeClientImpl implements RequestIframeClient, StreamMessa
       content,
       fileName: options?.fileName,
       mimeType: options?.mimeType,
-      chunked: false,
+      chunked: options?.chunked ?? false,
+      chunkSize: options?.chunkSize,
       autoResolve: options?.autoResolve ?? true,
       defaultFileName: typeof File !== 'undefined' && content instanceof File ? content.name : 'file',
       defaultMimeType: 'application/octet-stream',

@@ -12,4 +12,3 @@ export { RequestIframeEndpointFacade } from './facade';
 export { createStreamMessageHandler } from './stream/handler';
 export { buildStreamStartTimeoutErrorPayload } from './stream/errors';
 export { autoResolveIframeFileReadableStream, parseFilenameFromContentDisposition } from './stream/file-auto-resolve';
-export { createIframeFileWritableStreamFromContent } from './stream/file-writable';

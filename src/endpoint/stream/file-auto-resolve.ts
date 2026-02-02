@@ -1,6 +1,6 @@
 import type { StreamStartInfo } from './factory';
 import { HttpHeader } from '../../constants';
-import type { IframeFileReadableStream } from '../../stream';
+import { IframeFileReadableStream } from '../../stream';
 
 /**
  * Endpoint Stream integration layer (`src/endpoint/stream`)
@@ -12,11 +12,7 @@ import type { IframeFileReadableStream } from '../../stream';
  * Parse filename from Content-Disposition header.
  */
 export function parseFilenameFromContentDisposition(value?: string | string[]): string | undefined {
-  if (!value) return undefined;
-  const disposition = typeof value === 'string' ? value : value[0];
-  if (!disposition) return undefined;
-  const match = disposition.match(/filename="?([^"]+)"?/i);
-  return match ? match[1] : undefined;
+  return IframeFileReadableStream.parseFilenameFromContentDisposition(value);
 }
 
 /**
@@ -34,6 +30,11 @@ export function autoResolveIframeFileReadableStream(params: {
 }): Promise<File | Blob> {
   const headerFilename = parseFilenameFromContentDisposition(params.headers?.[HttpHeader.CONTENT_DISPOSITION]);
   const fileName = headerFilename || params.info?.metadata?.filename || params.fileStream.filename;
-  return fileName ? params.fileStream.readAsFile(fileName) : params.fileStream.readAsBlob();
+  const anyStream: any = params.fileStream as any;
+  if (typeof anyStream.readAsFileOrBlob === 'function') {
+    return anyStream.readAsFileOrBlob(fileName);
+  }
+  // Backward-compatible fallback for mocks/older stream objects
+  return fileName ? anyStream.readAsFile(fileName) : anyStream.readAsBlob();
 }
 

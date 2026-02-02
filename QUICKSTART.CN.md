@@ -29,15 +29,24 @@ yarn add request-iframe
 ## Step 1: 父页面创建 Client
 
 ```typescript
-// parent.html
+/** parent.html */
 import { requestIframeClient } from 'request-iframe';
 
-// 获取 iframe 元素
+/** 获取 iframe 元素 */
 const iframe = document.getElementById('my-iframe') as HTMLIFrameElement;
 
-// 创建 client（用于发送请求）
+/** 建议等待 iframe load，避免 contentWindow 尚未就绪导致通信失败 */
+await new Promise<void>((resolve) => iframe.addEventListener('load', () => resolve(), { once: true }));
+
+/** 创建 client（用于发送请求） */
 const client = requestIframeClient(iframe, { 
-  secretKey: 'my-app'  // 消息隔离标识，需要和 iframe 内保持一致
+  secretKey: 'my-app',  /** 消息隔离标识，需要和 iframe 内保持一致 */
+  /**
+   * strict: true 会把 targetOrigin/allowedOrigins 默认收敛到当前域名（window.location.origin）
+   * - 适用于同源 iframe
+   * - **注意：strict 不等于跨域安全配置**；若跨域，请显式配置 targetOrigin + allowedOrigins/validateOrigin
+   */
+  strict: true
 });
 
 // 发送请求并等待响应
@@ -54,12 +63,18 @@ console.log(user); // { name: 'Tom', age: 18 }
 ## Step 2: iframe 内创建 Server
 
 ```typescript
-// child.html (iframe 内)
+/** child.html（iframe 内） */
 import { requestIframeServer } from 'request-iframe';
 
-// 创建 server（用于接收请求）
+/**
+ * 创建 server（用于接收请求）
+ * - 生产环境强烈建议配置 allowedOrigins / validateOrigin
+ * - 这里使用同源 demo：父页面 origin === iframe 内页面 origin
+ *   若跨域，请改成父页面的 origin（例如 'https://parent.example.com'）
+ */
 const server = requestIframeServer({ 
-  secretKey: 'my-app'  // 必须和父页面的 client 保持一致！
+  secretKey: 'my-app',  /** 必须和父页面的 client 保持一致！ */
+  strict: true
 });
 
 // 注册请求处理器
@@ -224,11 +239,13 @@ import { LogLevel } from 'request-iframe';
 
 const client = requestIframeClient(iframe, { 
   secretKey: 'my-app',
+  /** 建议配置 targetOrigin/allowedOrigins（见 Step 1） */
   trace: LogLevel.INFO  // 输出 info/warn/error（也可以用 true 开启 TRACE）
 });
 
 const server = requestIframeServer({ 
   secretKey: 'my-app',
+  /** 建议配置 allowedOrigins/validateOrigin（见 Step 2） */
   trace: true
 });
 ```
@@ -254,12 +271,17 @@ const server = requestIframeServer({
 ### Q: 如何在 iframe 内向父页面发送请求？
 
 ```typescript
-// iframe 内
-const client = requestIframeClient(window.parent, { secretKey: 'reverse' });
+/**
+ * iframe 内
+ * - Window 场景必须显式设置 targetOrigin，并把它加入 allowedOrigins
+ */
+const parentOrigin = 'https://parent.example.com';
+const client = requestIframeClient(window.parent, { secretKey: 'reverse', targetOrigin: parentOrigin, allowedOrigins: [parentOrigin] });
 await client.send('/notify', { event: 'ready' });
 
-// 父页面
-const server = requestIframeServer({ secretKey: 'reverse' });
+/** 父页面（allowedOrigins 应配置为 iframe 的 origin） */
+const iframeOrigin = 'https://child.example.com';
+const server = requestIframeServer({ secretKey: 'reverse', allowedOrigins: [iframeOrigin] });
 server.on('/notify', (req, res) => {
   console.log('iframe 已就绪');
   res.send({ ok: true });

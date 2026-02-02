@@ -1,12 +1,12 @@
 import type { PostMessageData } from '../../types';
 import type { VersionValidator } from '../../message';
 import { MessageContext } from '../../message';
-import { MessageType, ProtocolVersion, Messages, formatMessage, MessageRole, WarnOnceKey, buildWarnOnceKey } from '../../constants';
+import { MessageType, ProtocolVersion, Messages, formatMessage, MessageRole } from '../../constants';
 import type { RequestIframeEndpointHub } from './hub';
 import { createPingResponder } from '../heartbeat/ping';
 import { SyncHook } from '../../utils/hooks';
-import { requestIframeLog } from '../../utils/logger';
 import type { RequestIframeEndpointOutbox } from './outbox';
+import { warnClientServerIgnoredMessageWhenClosedOnce } from '../../utils/warnings';
 
 /**
  * Pending request awaiting response
@@ -194,9 +194,7 @@ export class RequestIframeEndpointInbox {
        */
       if (!this.hub.isOpen) {
         this.hooks.missingPending.call(data, context);
-        this.hub.warnOnce(buildWarnOnceKey(WarnOnceKey.INBOX_MISSING_PENDING_WHEN_CLOSED, data.requestId), () => {
-          requestIframeLog('warn', formatMessage(Messages.CLIENT_SERVER_IGNORED_MESSAGE_WHEN_CLOSED, data.type, data.requestId));
-        });
+        warnClientServerIgnoredMessageWhenClosedOnce(this.hub, { type: data.type, requestId: data.requestId });
       }
       return;
     }

@@ -293,9 +293,26 @@ export class MessageChannel {
    * @param message message data (already formatted as PostMessageData)
    * @param targetOrigin target origin (defaults to '*')
    */
-  public send(target: Window, message: PostMessageData, targetOrigin: string = OriginConstant.ANY): boolean {
+  public send(
+    target: Window,
+    message: PostMessageData,
+    targetOrigin: string = OriginConstant.ANY,
+    transfer?: Transferable[]
+  ): boolean {
     if (!isWindowAvailable(target)) {
       return false;
+    }
+    /**
+     * Prefer transferable objects when provided.
+     * Use a try/catch fallback for environments that don't support the 3rd arg signature.
+     */
+    if (transfer && transfer.length) {
+      try {
+        (target as any).postMessage(message, targetOrigin, transfer);
+        return true;
+      } catch {
+        /** fall through to 2-arg postMessage */
+      }
     }
     target.postMessage(message, targetOrigin);
     return true;
@@ -314,13 +331,14 @@ export class MessageChannel {
     targetOrigin: string,
     type: PostMessageData['type'],
     requestId: string,
-    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role'>>
+    data?: Partial<Omit<PostMessageData, '__requestIframe__' | 'type' | 'requestId' | 'timestamp' | 'role'>>,
+    transfer?: Transferable[]
   ): boolean {
     const message = createPostMessage(type, requestId, {
       ...data,
       secretKey: this.secretKey
     });
-    return this.send(target, message, targetOrigin);
+    return this.send(target, message, targetOrigin, transfer);
   }
 
   /**

@@ -127,13 +127,20 @@ pnpm add request-iframe
 ```typescript
 import { requestIframeClient } from 'request-iframe';
 
-// 获取 iframe 元素
-const iframe = document.querySelector('iframe')!;
+/** 获取 iframe 元素 */
+const iframe = document.querySelector('iframe') as HTMLIFrameElement;
 
-// 创建 client
-const client = requestIframeClient(iframe, { secretKey: 'my-app' });
+/** 建议等待 iframe load，避免 contentWindow 尚未就绪导致通信失败 */
+await new Promise<void>((resolve) => iframe.addEventListener('load', () => resolve(), { once: true }));
 
-// 发送请求（就像 axios）
+/**
+ * 创建 client（更安全、更省配置的默认写法）
+ * - strict: true 会把 targetOrigin/allowedOrigins 默认收敛到当前域名（window.location.origin）
+ * - 适用于同源 iframe；若跨域，请显式配置 targetOrigin + allowedOrigins/validateOrigin
+ */
+const client = requestIframeClient(iframe, { secretKey: 'my-app', strict: true });
+
+/** 发送请求（就像 axios） */
 const response = await client.send('/api/getUserInfo', { userId: 123 });
 console.log(response.data); // { name: 'Tom', age: 18 }
 ```
@@ -143,10 +150,15 @@ console.log(response.data); // { name: 'Tom', age: 18 }
 ```typescript
 import { requestIframeServer } from 'request-iframe';
 
-// 创建 server
-const server = requestIframeServer({ secretKey: 'my-app' });
+/**
+ * 创建 server
+ * - 生产环境强烈建议配置 allowedOrigins / validateOrigin
+ * - 这里使用同源 demo：父页面 origin === iframe 内页面 origin
+ *   若跨域，请改成父页面的 origin（例如 'https://parent.example.com'）
+ */
+const server = requestIframeServer({ secretKey: 'my-app', strict: true });
 
-// 注册处理器（就像 express）
+/** 注册处理器（就像 express） */
 server.on('/api/getUserInfo', (req, res) => {
   const { userId } = req.body;
   res.send({ name: 'Tom', age: 18 });
@@ -284,14 +296,14 @@ client.send('/api/getData', data, {
 在微前端架构中，主应用需要与子应用 iframe 进行数据交互：
 
 ```typescript
-// 主应用（父页面）
-const client = requestIframeClient(iframe, { secretKey: 'main-app' });
+/** 主应用（父页面，同源默认推荐 strict: true） */
+const client = requestIframeClient(iframe, { secretKey: 'main-app', strict: true });
 
-// 获取子应用的用户信息
+/** 获取子应用的用户信息 */
 const userInfoResponse = await client.send('/api/user/info', {});
 console.log(userInfoResponse.data); // 用户信息数据
 
-// 通知子应用更新数据
+/** 通知子应用更新数据 */
 await client.send('/api/data/refresh', { timestamp: Date.now() });
 ```
 
@@ -300,22 +312,24 @@ await client.send('/api/data/refresh', { timestamp: Date.now() });
 集成第三方组件时，通过 iframe 隔离，同时保持通信：
 
 ```typescript
-// 父页面
-const client = requestIframeClient(thirdPartyIframe, { secretKey: 'widget' });
+/** 父页面（同源默认推荐 strict: true） */
+const client = requestIframeClient(thirdPartyIframe, { secretKey: 'widget', strict: true });
 
-// 配置组件
+/** 配置组件 */
 await client.send('/config', {
   theme: 'dark',
   language: 'zh-CN'
 });
 
-// 监听组件事件（通过反向通信）
-const server = requestIframeServer({ secretKey: 'widget' });
+/** 监听组件事件（通过反向通信） */
+const server = requestIframeServer({ secretKey: 'widget', strict: true });
 server.on('/event', (req, res) => {
   console.log('组件事件:', req.body);
   res.send({ received: true });
 });
 ```
+
+> 若第三方 iframe **跨域**，请显式配置 `targetOrigin` 与 `allowedOrigins/validateOrigin`（见「安全建议」一节）。
 
 ### 弹窗 / 新标签页（Window 通信）
 
@@ -324,19 +338,25 @@ server.on('/event', (req, res) => {
 **重要前提**：你必须拿到对方页面的 `Window` 引用（例如 `window.open()` 的返回值，或通过 `window.opener` / `MessageEvent.source` 获取）。**无法**通过 URL 给“任意标签页”发消息。
 
 ```typescript
-// 父页面：打开新标签页/弹窗
+/** 父页面：打开新标签页/弹窗 */
 const child = window.open('https://child.example.com/page.html', '_blank');
 if (!child) throw new Error('弹窗被拦截');
 
-// 父 -> 子
+/** 父 -> 子 */
+const targetOrigin = 'https://child.example.com';
 const client = requestIframeClient(child, {
   secretKey: 'popup-demo',
-  targetOrigin: 'https://child.example.com' // 强烈建议不要用 '*'
+  targetOrigin,
+  allowedOrigins: [targetOrigin]
 });
 await client.send('/api/ping', { from: 'parent' });
 
-// 子页面：创建 server
-const server = requestIframeServer({ secretKey: 'popup-demo' });
+/**
+ * 子页面：创建 server
+ * 注意：allowedOrigins 应配置为父页面 origin（这里用示例值，请替换成真实值）
+ */
+const parentOrigin = 'https://parent.example.com';
+const server = requestIframeServer({ secretKey: 'popup-demo', allowedOrigins: [parentOrigin] });
 server.on('/api/ping', (req, res) => res.send({ ok: true, echo: req.body }));
 ```
 
@@ -345,8 +365,12 @@ server.on('/api/ping', (req, res) => res.send({ ok: true, echo: req.body }));
 当 iframe 与父页面不同域时，使用 request-iframe 安全地获取数据：
 
 ```typescript
-// iframe 内（不同域）
-const server = requestIframeServer({ secretKey: 'data-api' });
+/**
+ * iframe 内（不同域）
+ * 注意：allowedOrigins 应配置为父页面 origin（这里用示例值，请替换成真实值）
+ */
+const parentOrigin = 'https://parent.example.com';
+const server = requestIframeServer({ secretKey: 'data-api', allowedOrigins: [parentOrigin] });
 
 server.on('/api/data', async (req, res) => {
   // 从同域 API 获取数据（iframe 可以访问同域资源）
@@ -354,8 +378,13 @@ server.on('/api/data', async (req, res) => {
   res.send(data);
 });
 
-// 父页面（跨域）
-const client = requestIframeClient(iframe, { secretKey: 'data-api' });
+/** 父页面（跨域） */
+const targetOrigin = new URL(iframe.src).origin;
+const client = requestIframeClient(iframe, {
+  secretKey: 'data-api',
+  targetOrigin,
+  allowedOrigins: [targetOrigin]
+});
 const response = await client.send('/api/data', {});
 const data = response.data; // 成功获取跨域数据
 ```
@@ -769,6 +798,17 @@ import {
   isIframeFileReadableStream 
 } from 'request-iframe';
 
+/**
+ * 选型建议（数据流 vs 文件/字节流）
+ *
+ * - IframeWritableStream / IframeReadableStream:
+ *   用于“业务数据”（对象/字符串等），依赖 structured clone，适合 JSON/事件/日志等。
+ * - IframeFileWritableStream / IframeFileReadableStream:
+ *   用于“字节序列”（文件/二进制/UTF-8 文本文件），chunk 语义是 bytes，适合大文件与二进制传输。
+ *   - 文本文件推荐：IframeFileWritableStream.fromText(...) + fileStream.readAsText()
+ *   - 二进制推荐：直接传 Uint8Array/ArrayBuffer（可走 transferable）
+ */
+
 // Server 端：使用迭代器发送数据流
 server.on('/api/stream', async (req, res) => {
   const stream = new IframeWritableStream({
@@ -820,6 +860,19 @@ server.on('/api/fileStream', async (req, res) => {
   await res.sendStream(stream);
 });
 
+// Server 端：方式2（推荐）——用 from() 从 Blob/File 一键创建（自动分片）
+server.on('/api/fileStream2', async (req, res) => {
+  const blob = new Blob([/* 文件内容 */], { type: 'application/octet-stream' });
+  const stream = await IframeFileWritableStream.from({
+    content: blob,
+    fileName: 'large-file.bin',
+    mimeType: 'application/octet-stream',
+    chunked: true,
+    chunkSize: 256 * 1024
+  });
+  await res.sendStream(stream);
+});
+
 // Client 端：接收流数据
 const response = await client.send('/api/stream', {});
 
@@ -856,6 +909,9 @@ if (isIframeFileReadableStream(fileResponse.stream)) {
   // 读取为 Blob
   const blob = await fileResponse.stream.readAsBlob();
   
+  // 读取为 UTF-8 文本（适用于“文本文件”）
+  const text = await fileResponse.stream.readAsText();
+  
   // 读取为 ArrayBuffer
   const buffer = await fileResponse.stream.readAsArrayBuffer();
   
@@ -874,11 +930,11 @@ if (isIframeFileReadableStream(fileResponse.stream)) {
 | 类型 | 说明 |
 |------|------|
 | `IframeWritableStream` | 写侧（生产者）流：**谁要发送 stream，谁就创建它**；可用于 Server→Client 的响应流，也可用于 Client→Server 的请求流 |
-| `IframeFileWritableStream` | 文件写侧（生产者）流：用于发送文件（底层会做 Base64 编码） |
+| `IframeFileWritableStream` | 文件写侧（生产者）流：用于发送文件（支持 `Uint8Array` / `ArrayBuffer` 分片；会尽量使用 transferable 传输以减少拷贝） |
 | `IframeReadableStream` | 读侧（消费者）流：用于接收普通数据（无论来自 Server 还是 Client） |
-| `IframeFileReadableStream` | 文件读侧（消费者）流：用于接收文件（底层会做 Base64 解码） |
+| `IframeFileReadableStream` | 文件读侧（消费者）流：用于接收文件（支持二进制分片） |
 
-> **注意**：文件流内部会进行 Base64 编/解码。Base64 会带来约 33% 的体积膨胀，并且在超大文件场景下可能会有较高的内存/CPU 开销。大文件建议使用 **分块** 文件流（`chunked: true`），并控制 chunk 大小（例如 256KB–1MB）。
+> **注意**：文件流的 chunk 语义是“字节序列”。当前版本默认以二进制 chunk（`ArrayBuffer`/`Uint8Array`）传输，并会尽量使用 transferable 来降低拷贝与开销。若你手写 `iterator/next` 产出 `string`，会按 **UTF-8 编码成字节** 后再传输；要传二进制请直接产出 `Uint8Array/ArrayBuffer`。大文件建议使用 **分块** 文件流（`chunked: true`），并控制 chunk 大小（例如 256KB–1MB）。
 
 **流选项：**
 
@@ -1007,6 +1063,7 @@ setMessages({
 | `target` | `HTMLIFrameElement \| Window` | 目标 iframe 元素或 window 对象 |
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
 | `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | trace/日志等级（可选）。默认只输出 warn/error |
+| `options.strict` | `boolean` | 严格模式（推荐同源默认）：当你未显式配置 `targetOrigin/allowedOrigins/validateOrigin` 时，默认收敛为 `window.location.origin`（同源 only）。**注意：strict 不等于跨域安全配置**，跨域场景仍需显式设置 `targetOrigin` + `allowedOrigins/validateOrigin`。 |
 | `options.targetOrigin` | `string` | 覆盖 postMessage 的 targetOrigin（可选）。当 `target` 是 `Window` 时默认 `*`；当 `target` 是 iframe 时默认取 `iframe.src` 的 origin。 |
 | `options.ackTimeout` | `number` | 全局默认 ACK 确认超时（ms），默认 1000 |
 | `options.timeout` | `number` | 全局默认请求超时（ms），默认 5000 |
@@ -1021,7 +1078,8 @@ setMessages({
 **关于 `target: Window` 的说明：**
 - **必须持有对方页面的 `Window` 引用**（例如 `window.open()` 返回值、`window.opener`、或 `MessageEvent.source`）。
 - **无法**通过 URL 给“任意标签页”发消息。
-- 安全起见，建议显式设置 `targetOrigin`，并配置 `allowedOrigins` / `validateOrigin`。
+- 安全起见，建议显式设置 `targetOrigin`（不要用 `*`），并配置 `allowedOrigins` / `validateOrigin`。
+- `strict: true` 只会把默认值收敛到当前域名（同源 only），并**不会**自动帮你完成跨域场景的安全配置。
 
 **生产环境推荐配置（模板）：**
 
@@ -1109,6 +1167,7 @@ await client.send('/api/longTask', {}, {
 |------|------|------|
 | `options.secretKey` | `string` | 消息隔离标识（可选） |
 | `options.trace` | `boolean \| 'trace' \| 'info' \| 'warn' \| 'error' \| 'silent'` | trace/日志等级（可选）。默认只输出 warn/error |
+| `options.strict` | `boolean` | 严格模式（推荐同源默认）：当你未显式配置 `allowedOrigins/validateOrigin` 时，默认 `allowedOrigins: [window.location.origin]`（同源 only）。**注意：strict 不等于跨域安全配置**，跨域场景仍需显式配置父页面 origin 的 allowlist/validator。 |
 | `options.ackTimeout` | `number` | 等待客户端确认超时（ms），默认 1000 |
 | `options.maxConcurrentRequestsPerClient` | `number` | 每个客户端的最大并发 in-flight 请求数（按 origin + creatorId 维度），默认 Infinity |
 | `options.allowedOrigins` | `string \| RegExp \| Array<string \| RegExp>` | 接收消息的 origin 白名单（可选，生产环境强烈建议配置） |
@@ -1837,13 +1896,34 @@ try {
 `secretKey` 用于消息隔离。当页面中有多个 iframe 或多个 request-iframe 实例时，通过不同的 `secretKey` 可以避免消息串线：
 
 ```typescript
-// iframe A 的通信
-const clientA = requestIframeClient(iframeA, { secretKey: 'app-a' });
-const serverA = requestIframeServer({ secretKey: 'app-a' });
+/**
+ * iframe A 的通信
+ * - 父页面需要 allowlist iframe A 的 origin
+ * - iframe A 内需要 allowlist 父页面的 origin
+ */
+const iframeASrc = iframeA.getAttribute('src');
+if (!iframeASrc) throw new Error('iframeA src is empty');
+const iframeAOrigin = new URL(iframeASrc, window.location.href).origin;
+const clientA = requestIframeClient(iframeA, {
+  secretKey: 'app-a',
+  targetOrigin: iframeAOrigin,
+  allowedOrigins: [iframeAOrigin]
+});
+const parentOrigin = 'https://parent.com';
+const serverA = requestIframeServer({ secretKey: 'app-a', allowedOrigins: [parentOrigin] });
 
-// iframe B 的通信
-const clientB = requestIframeClient(iframeB, { secretKey: 'app-b' });
-const serverB = requestIframeServer({ secretKey: 'app-b' });
+/**
+ * iframe B 的通信（同理）
+ */
+const iframeBSrc = iframeB.getAttribute('src');
+if (!iframeBSrc) throw new Error('iframeB src is empty');
+const iframeBOrigin = new URL(iframeBSrc, window.location.href).origin;
+const clientB = requestIframeClient(iframeB, {
+  secretKey: 'app-b',
+  targetOrigin: iframeBOrigin,
+  allowedOrigins: [iframeBOrigin]
+});
+const serverB = requestIframeServer({ secretKey: 'app-b', allowedOrigins: [parentOrigin] });
 ```
 
 ### 2. 为什么需要 ACK 确认？
@@ -1858,14 +1938,28 @@ ACK 机制类似 TCP 握手，用于：
 `postMessage` 本身支持跨域通信，request-iframe 会自动处理：
 
 ```typescript
-// 父页面 (https://parent.com)
-const client = requestIframeClient(iframe);
+/**
+ * 父页面 (https://parent.com)
+ * - targetOrigin/allowedOrigins 应配置为 iframe 的 origin
+ */
+const iframeSrc = iframe.getAttribute('src');
+if (!iframeSrc) throw new Error('iframe src is empty');
+const childOrigin = new URL(iframeSrc, window.location.href).origin;
+const client = requestIframeClient(iframe, {
+  secretKey: 'my-app',
+  targetOrigin: childOrigin,
+  allowedOrigins: [childOrigin]
+});
 
-// iframe 内 (https://child.com)
-const server = requestIframeServer();
+/**
+ * iframe 内 (https://child.com)
+ * - allowedOrigins 应配置为父页面的 origin
+ */
+const parentOrigin = 'https://parent.com';
+const server = requestIframeServer({ secretKey: 'my-app', allowedOrigins: [parentOrigin] });
 ```
 
-只需确保双方使用相同的 `secretKey`。
+只需确保双方使用相同的 `secretKey`，并正确配置 `targetOrigin` / `allowedOrigins`。
 
 ### 4. Server 可以主动推送消息吗？
 
@@ -1876,9 +1970,17 @@ request-iframe 是请求-响应模式，Server 本身不能“主动推送”。
 - 双方都使用 `requestIframeEndpoint()`（推荐），一个对象同时具备 **send + handle**
 
 ```typescript
-// iframe 内
-const server = requestIframeServer({ secretKey: 'my-app' });
-const client = requestIframeClient(window.parent, { secretKey: 'my-app-reverse' });
+/**
+ * iframe 内
+ * - Window 场景必须显式设置 targetOrigin，并把它加入 allowedOrigins
+ */
+const parentOrigin = 'https://parent.com';
+const server = requestIframeServer({ secretKey: 'my-app', allowedOrigins: [parentOrigin] });
+const client = requestIframeClient(window.parent, {
+  secretKey: 'my-app-reverse',
+  targetOrigin: parentOrigin,
+  allowedOrigins: [parentOrigin]
+});
 
 // 主动向父页面发送消息
 await client.send('/notify', { event: 'data-changed' });
@@ -1911,12 +2013,23 @@ server.on('/api/largeFile', async (req, res) => {
       // 分块读取文件
       const chunkSize = 1024 * 1024; // 1MB per chunk
       for (let i = 0; i < fileSize; i += chunkSize) {
+        // 建议产出 Uint8Array / ArrayBuffer（可走 transferable）
         yield await readFileChunk(i, chunkSize);
       }
     }
   });
   await res.sendStream(stream);
 });
+
+// 也可以用 from() 从 Blob/File 自动分片生成文件流
+// const { stream } = await IframeFileWritableStream.from({
+//   content: someBlobOrFile,
+//   fileName: 'large-file.zip',
+//   mimeType: 'application/zip',
+//   chunked: true,
+//   chunkSize: 1024 * 1024
+// });
+// await res.sendStream(stream);
 ```
 
 ### 8. 如何实现请求重试？

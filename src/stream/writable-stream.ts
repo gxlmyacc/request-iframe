@@ -287,7 +287,30 @@ export class IframeWritableStream
       targetId: this.context.targetId
     });
     
-    const ok = this.context.channel.send(this.context.targetWindow, message, this.context.targetOrigin);
+    /**
+     * Transferable optimization:
+     * - If payload contains ArrayBuffer/TypedArray, transfer its underlying buffer to avoid copy.
+     * - This helps large chunks (e.g. file streams) significantly.
+     */
+    const payloadData = (data as any)?.data;
+    let transfer: Transferable[] | undefined;
+    try {
+      if (typeof ArrayBuffer !== 'undefined' && payloadData instanceof ArrayBuffer) {
+        transfer = [payloadData];
+      } else if (
+        typeof ArrayBuffer !== 'undefined' &&
+        typeof ArrayBuffer.isView === 'function' &&
+        payloadData &&
+        ArrayBuffer.isView(payloadData) &&
+        payloadData.buffer instanceof ArrayBuffer
+      ) {
+        transfer = [payloadData.buffer];
+      }
+    } catch {
+      /** ignore */
+    }
+
+    const ok = (this.context.channel as any).send(this.context.targetWindow, message, this.context.targetOrigin, transfer);
     if (!ok) {
       this._state = StreamStateConstant.CANCELLED;
       this.clearExpireTimer();
