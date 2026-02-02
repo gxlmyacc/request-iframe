@@ -7,7 +7,7 @@ import { isFunction } from '../utils/is';
 import { getAckId, getAckMeta } from '../utils/ack';
 import { SyncHook } from '../utils/hooks';
 import { requestIframeLog } from '../utils/logger';
-import { MessageChannel, type MessageContext } from './channel';
+import { MessageChannel, MessageContextStage, type MessageContext } from './channel';
 
 /**
  * Message handler function type
@@ -244,6 +244,7 @@ export class MessageDispatcher {
       }
     }
 
+    let offEarlyAutoAck: (() => void) | undefined;
     try {
       this.hooks.inbound.call(data, context);
 
@@ -266,6 +267,28 @@ export class MessageDispatcher {
         autoAckState.sent = true;
         this.tryAutoAck(data, context);
       };
+
+      /**
+       * Early auto-ack: send ACK as soon as the handler "accepts" the message.
+       *
+       * Why:
+       * - For request delivery confirmation, ACK should represent "accepted/claimed by server"
+       *   instead of "handler finished".
+       * - This keeps client-side ackTimeout meaningful and avoids being delayed by business logic.
+       *
+       * Notes:
+       * - Only contexts created by MessageChannel have onStateChange; tests may provide mocks.
+       * - We keep the original end-of-dispatch maybeAutoAck() as a fallback for older/edge contexts.
+       */
+      const onStateChangeMaybe = (context as { onStateChange?: unknown }).onStateChange;
+      offEarlyAutoAck =
+        typeof onStateChangeMaybe === 'function'
+          ? (onStateChangeMaybe as MessageContext['onStateChange'])('autoAck:early', (_prev, next) => {
+              if (next === MessageContextStage.ACCEPTED) {
+                maybeAutoAck();
+              }
+            })
+          : undefined;
 
       for (const entry of this.handlers) {
         if (this.matchType(type, entry.matcher)) {
@@ -301,6 +324,11 @@ export class MessageDispatcher {
       // (This is safe due to autoAckState guard.)
       maybeAutoAck();
     } finally {
+      try {
+        offEarlyAutoAck?.();
+      } catch {
+        // ignore
+      }
       /**
        * Mark as "done" only when this dispatcher actually claimed/handled this message.
        * - If the message was never claimed (handledBy not set), we keep `doneBy` empty so another
