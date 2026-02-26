@@ -2160,9 +2160,9 @@ core-js-compat@^3.43.0:
   dependencies:
     browserslist "^4.28.1"
 
-core-js@^3.48.0:
+core-js@^3:
   version "3.48.0"
-  resolved "https://registry.npmjs.org/core-js/-/core-js-3.48.0.tgz"
+  resolved "https://registry.npmjs.org/core-js/-/core-js-3.48.0.tgz#1f813220a47bbf0e667e3885c36cd6f0593bf14d"
   integrity sha512-zpEHTy1fjTMZCKLHUZoVeylt9XrzaIN2rbPXEt0k+q7JE5CkCZdo6bNq55bn24a69CH7ErAVLKijxJja4fw+UQ==
 
 core-util-is@1.0.2:
